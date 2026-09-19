@@ -225,14 +225,32 @@ It will automatically discover your Region, Cats & Devices.
 
 #### Request API
 
+`catlink.request_api` calls any CatLink Cloud endpoint using the target entity's Account Session. This is the escape hatch for anything this integration does not model yet. The target entity only selects which Account's Session signs the request; it does not have to be related to the endpoint you call. `params` must be a mapping.
+
+The response is returned as service response data, so scripts and automations can use it. It is also shown as a persistent notification by default; pass `throw: false` to suppress it.
+
+> ! Warning: there is no denylist, so this can also reach destructive endpoints, such as unbinding a Device. Only call endpoints you trust.
+
+Read-only call, no parameters:
+
 ```yaml
 service: catlink.request_api
 target:
-  entity_id: sensor.scooper_xxxxxx_state # Any sensor entity in the account
+  entity_id: sensor.scooper_xxxxxx_state # Any sensor entity on the Account
 data:
-  api: /token/device/union/list/sorted
+  api: token/device/union/list/sorted
+```
+
+Call with parameters:
+
+```yaml
+service: catlink.request_api
+target:
+  entity_id: sensor.scooper_xxxxxx_state
+data:
+  api: token/litterbox/aboutDevice
   params:
-    key: val
+    deviceId: "1234567890"
 ```
 
 ## Changelog
