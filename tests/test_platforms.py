@@ -12,12 +12,18 @@ from custom_components.catlink.const import (
     DOMAIN,
     SUPPORTED_DOMAINS,
 )
+from custom_components.catlink.devices.litterbox import LitterBox
+from custom_components.catlink.entities.registry import DOMAIN_ENTITY_CLASSES
+from custom_components.catlink.entities.sensor import CatlinkSensorEntity
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_DEVICES
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+
+DEVICE_UNIQUE_ID = "LITTER_BOX_599_AABBCCDDEEFF-error"
 
 
 @pytest.fixture
@@ -84,6 +90,33 @@ async def init_integration(
     await hass.async_block_till_done()
 
     return mock_config_entry
+
+
+@pytest.fixture
+def catlink_device():
+    """Return a Device whose entities can be added to a real platform."""
+    coordinator = MagicMock()
+    coordinator.account = MagicMock()
+    device = LitterBox(
+        {
+            "id": "dev123",
+            "mac": "AABBCCDDEEFF",
+            "model": "LB599",
+            "deviceName": "Test Litter Box",
+            "deviceType": "LITTER_BOX_599",
+        },
+        coordinator,
+    )
+    device.detail = {"firmwareVersion": "1.0.0", "currentError": "Normal"}
+    return device
+
+
+async def _add_entity(
+    hass: HomeAssistant, entry: MockConfigEntry, domain: str, entity
+) -> None:
+    """Add an entity through the add_entities callback the platform registered."""
+    hass.data[DOMAIN]["add_entities"][entry.entry_id][domain]([entity])
+    await hass.async_block_till_done()
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
@@ -170,3 +203,83 @@ async def test_all_platforms_have_setup_entry(
     ]:
         assert hasattr(module, "async_setup_entry")
         assert callable(module.async_setup_entry)
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+@pytest.mark.parametrize("platform_domain", SUPPORTED_DOMAINS)
+async def test_entity_id_uses_platform_domain(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    catlink_device,
+    platform_domain: str,
+) -> None:
+    """Test a newly added entity lands in its platform domain with the documented object id."""
+    entity = DOMAIN_ENTITY_CLASSES[platform_domain](
+        "error", catlink_device, {"options": ["Normal"]}
+    )
+
+    await _add_entity(hass, init_integration, platform_domain, entity)
+
+    assert entity.entity_id == f"{platform_domain}.litter_box_599_eeff_error"
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_registered_entity_keeps_its_entity_id(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    catlink_device,
+) -> None:
+    """Test an entity already in the registry keeps the entity ID stored there."""
+    er.async_get(hass).async_get_or_create(
+        "sensor",
+        DOMAIN,
+        DEVICE_UNIQUE_ID,
+        suggested_object_id="renamed_by_the_person",
+        config_entry=init_integration,
+    )
+    entity = CatlinkSensorEntity("error", catlink_device)
+
+    await _add_entity(hass, init_integration, "sensor", entity)
+
+    assert entity.entity_id == "sensor.renamed_by_the_person"
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_no_wrong_domain_warning_logged(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    catlink_device,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test adding entities logs no wrong-domain deprecation warning."""
+    for platform_domain in SUPPORTED_DOMAINS:
+        entity = DOMAIN_ENTITY_CLASSES[platform_domain](
+            "error", catlink_device, {"options": ["Normal"]}
+        )
+        await _add_entity(hass, init_integration, platform_domain, entity)
+
+    assert "entity ID with wrong domain" not in caplog.text
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_listeners_fire_after_entity_id_rewrite(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    catlink_device,
+) -> None:
+    """Test a Device notifies an entity whose ID the registry rewrote."""
+    er.async_get(hass).async_get_or_create(
+        "sensor",
+        DOMAIN,
+        DEVICE_UNIQUE_ID,
+        suggested_object_id="renamed_by_the_person",
+        config_entry=init_integration,
+    )
+    entity = CatlinkSensorEntity("error", catlink_device)
+    await _add_entity(hass, init_integration, "sensor", entity)
+
+    catlink_device.detail = {"currentError": "Litter box full"}
+    catlink_device._handle_listeners()  # noqa: SLF001
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.renamed_by_the_person").state == "Litter box full"
