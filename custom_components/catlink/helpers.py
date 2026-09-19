@@ -2,7 +2,7 @@
 
 from datetime import timedelta
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import phonenumbers
 from phonenumbers import NumberParseException
@@ -20,6 +20,7 @@ from .const import (
 )
 
 if TYPE_CHECKING:
+    from .devices.base import Device
     from .modules.devices_coordinator import DevicesCoordinator
 
 
@@ -87,6 +88,54 @@ async def discover_region(
         if await account.async_login():
             return region
     return None
+
+
+def optional_int(
+    value: Any, device: "Device | None" = None, cause: str | None = None
+) -> int | None:
+    """Convert a CatLink Cloud value to int, treating null or absent as unknown.
+
+    The CatLink Cloud sends null, omits the key entirely, or sends an empty
+    or whitespace-only string, for numeric fields it has no value for;
+    every one of those returns None so a sensor reports unknown instead of
+    a misleading 0. When device and cause are given, a value that is
+    present but not int-parseable is logged once per Device per cause at
+    warning level, rather than on every poll.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        if device is not None and cause is not None:
+            device.warn_once(
+                cause, "Unexpected value for %s on %s: %r", cause, device.name, value
+            )
+        return None
+
+
+def optional_float(
+    value: Any, device: "Device | None" = None, cause: str | None = None
+) -> float | None:
+    """Convert a CatLink Cloud value to float, treating null or absent as unknown.
+
+    Same rules as optional_int, for a value that is a float rather than a
+    count.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        if device is not None and cause is not None:
+            device.warn_once(
+                cause, "Unexpected value for %s on %s: %r", cause, device.name, value
+            )
+        return None
 
 
 def format_api_error(rdt: dict) -> str:
