@@ -53,9 +53,13 @@ class LogsMixin:
         }
 
     async def _fetch_logs(self, api: str, response_key: str) -> list:
-        """Fetch logs from API. Subclasses call this from update_logs with their api path and response key."""
+        """Fetch logs from API. Subclasses call this from update_logs with their api path and response key.
+
+        An empty or null log list is a normal "no recent activity" response,
+        not a failure, so it is not logged.
+        """
         pms = {"deviceId": self.id}
-        rsp = None
+        rdt = []
         try:
             rsp = await self.account.request(api, pms)
             data = rsp.get("data", {})
@@ -66,11 +70,11 @@ class LogsMixin:
                 rdt = parsed
             else:
                 rdt = data.get(response_key) or []
+            self.clear_warning("logs_fetch_failed")
         except (TypeError, ValueError) as exc:
-            rdt = []
-            _LOGGER.error("Got device logs for %s failed: %s", self.name, exc)
-        if not rdt:
-            _LOGGER.warning("Got device logs for %s failed: %s", self.name, rsp)
+            self.warn_once(
+                "logs_fetch_failed", "Got device logs for %s failed: %s", self.name, exc
+            )
         self.logs = rdt
         self._handle_listeners()
         return rdt
