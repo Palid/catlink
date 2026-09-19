@@ -14,6 +14,7 @@ from .const import (
 )
 from .modules.account import Account
 from .modules.devices_coordinator import DevicesCoordinator
+from .sensor import async_register_request_api_service
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -48,6 +49,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN]["entry_coordinators"][entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, SUPPORTED_DOMAINS)
+
+    await async_register_request_api_service(hass)
 
     return True
 
