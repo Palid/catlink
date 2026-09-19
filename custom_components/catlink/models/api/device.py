@@ -32,11 +32,11 @@ class DeviceInfoBase(BaseModel):
     keyLock: str = ""
     safeTime: str = ""
     catLitterPaveSecond: str = ""
-    catLitterWeight: float = 0.0
-    inductionTimes: Any = 0
-    manualTimes: Any = 0
-    deodorantCountdown: int = 0
-    litterCountdown: Any = None
+    catLitterWeight: float | None = None
+    inductionTimes: int | str | None = None
+    manualTimes: int | str | None = None
+    deodorantCountdown: int | str | None = None
+    litterCountdown: int | str | None = None
     online: bool = False
     firmwareVersion: str = ""
     lastHeartBeatTimestamp: Any = None

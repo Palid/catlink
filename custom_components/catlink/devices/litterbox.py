@@ -4,7 +4,7 @@ import datetime
 from typing import TYPE_CHECKING
 
 from ..const import _LOGGER
-from ..helpers import format_api_error
+from ..helpers import format_api_error, optional_int
 from ..models.additional_cfg import AdditionalDeviceConfig
 from ..models.api.device import LitterDeviceInfo
 from ..models.api.parse import parse_response
@@ -73,21 +73,17 @@ class LitterBox(LitterDevice):
             return "Unknown"
 
     @property
-    def litter_remaining_days(self) -> int:
-        """Return the litter remaining days."""
-        try:
-            raw = self.detail.get("litterCountdown", 0)
-            result = int(raw)
-            if result == 0:
-                _LOGGER.debug(
-                    "litter_remaining_days is 0: litterCountdown=%r (detail keys: %s)",
-                    raw,
-                    list(self.detail.keys()) if self.detail else "none",
-                )
-            return result
-        except Exception as exc:
-            _LOGGER.error("Got litter remaining days failed: %s", exc)
-            return 0
+    def litter_remaining_days(self) -> int | None:
+        """Return the litter remaining days, or unknown if the cloud has none."""
+        raw = self.detail.get("litterCountdown")
+        result = optional_int(raw, self, "litterCountdown")
+        if result == 0:
+            _LOGGER.debug(
+                "litter_remaining_days is 0: litterCountdown=%r (detail keys: %s)",
+                raw,
+                list(self.detail.keys()) if self.detail else "none",
+            )
+        return result
 
     @property
     def knob_status(self) -> str:

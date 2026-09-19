@@ -6,6 +6,7 @@ import datetime
 from typing import TYPE_CHECKING
 
 from ..const import _LOGGER
+from ..helpers import optional_int
 from ..models.additional_cfg import AdditionalDeviceConfig
 from ..models.api.device import LitterDeviceInfo
 from ..models.api.logs import LogEntry
@@ -38,22 +39,14 @@ class ScooperProUltraDevice(LitterDevice):
         return f"{base_name}{suffix}".strip()
 
     @property
-    def litter_remaining_days(self) -> int:
-        """Return the litter remaining days."""
-        try:
-            return int(self.detail.get("litterCountdown", 0))
-        except Exception as exc:
-            _LOGGER.error("Got litter remaining days failed: %s", exc)
-            return 0
+    def litter_remaining_days(self) -> int | None:
+        """Return the litter remaining days, or unknown if the cloud has none."""
+        return optional_int(self.detail.get("litterCountdown"), self, "litterCountdown")
 
     @property
-    def total_clean_time(self) -> int:
-        """Return total clean time from briefInfo when available."""
-        try:
-            return int(self.detail.get("totalCleanTimes", 0))
-        except Exception as exc:
-            _LOGGER.error("Get total clean time failed: %s", exc)
-            return 0
+    def total_clean_time(self) -> int | None:
+        """Return total clean time from briefInfo, or unknown if the cloud has none."""
+        return optional_int(self.detail.get("totalCleanTimes"), self, "totalCleanTimes")
 
     @property
     def hass_sensor(self) -> dict:
