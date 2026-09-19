@@ -1,5 +1,8 @@
 request_api:
-  description: Request API
+  description: >-
+    Call any CatLink Cloud endpoint with the target entity's Account Session.
+    Warning: this can also reach destructive endpoints, such as unbinding a
+    Device. There is no denylist, so only call endpoints you trust.
   target:
     entity:
       integration: catlink
@@ -7,13 +10,13 @@ request_api:
   fields:
     api:
       description: API path
-      example: /token/device/union/list/sorted
+      example: token/device/union/list/sorted
       required: true
       selector:
         text:
     params:
-      description: Request params
-      example: '{"key":"val"}'
+      description: Request params. Must be a mapping; a string is rejected.
+      example: '{"deviceId": "1234567890"}'
       selector:
         object:
     method:
@@ -27,7 +30,7 @@ request_api:
             - POST
             - POST_GET
     throw:
-      description: Throw result
+      description: Also show the response as a persistent notification.
       default: true
       example: true
       selector:
