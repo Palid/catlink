@@ -756,3 +756,97 @@ class TestAccountRequestErrors:
         result = await account.request("token/device/list")
 
         assert result == {}
+
+
+class TestAccountEvictionRecovery:
+    """Tests for the single-place Eviction recovery in request()."""
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_request_succeeds_after_one_reclaim(self, account) -> None:
+        """Test a 1002 reclaims the Session once and the request then succeeds."""
+        responses = [
+            {"returnCode": 1002, "msg": "Illegal token"},
+            {"returnCode": 0, "data": {"ok": 1}},
+        ]
+
+        async def mock_request(method, url, **kwargs):
+            assert "_retried" not in kwargs
+            resp = MagicMock()
+            resp.json = AsyncMock(return_value=responses.pop(0))
+            return resp
+
+        account.http.request = mock_request
+
+        with patch.object(
+            account, "async_login", new_callable=AsyncMock, return_value=True
+        ) as mock_login:
+            result = await account.request(
+                "token/device/union/list/sorted", {"type": "NONE"}
+            )
+
+        assert result == {"returnCode": 0, "data": {"ok": 1}}
+        mock_login.assert_called_once()
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_retry_after_eviction_carries_fresh_signature_and_token(
+        self, account
+    ) -> None:
+        """Test the retried request re-signs clean params and carries the new token."""
+        captured: list[dict] = []
+        responses = [
+            {"returnCode": 1002, "msg": "Illegal token"},
+            {"returnCode": 0, "data": {"ok": 1}},
+        ]
+
+        async def mock_request(method, url, **kwargs):
+            assert "_retried" not in kwargs
+            pms = kwargs.get("params") or kwargs.get("data") or {}
+            captured.append(dict(pms))
+            resp = MagicMock()
+            resp.json = AsyncMock(return_value=responses.pop(0))
+            return resp
+
+        account.http.request = mock_request
+
+        async def reclaim() -> bool:
+            account._config[CONF_TOKEN] = "fresh-token"
+            return True
+
+        with patch.object(account, "async_login", side_effect=reclaim):
+            result = await account.request(
+                "token/device/union/list/sorted", {"type": "NONE"}
+            )
+
+        assert result == {"returnCode": 0, "data": {"ok": 1}}
+        assert len(captured) == 2
+        retried = captured[1]
+        assert retried[CONF_TOKEN] == "fresh-token"
+        signed_params = {k: v for k, v in retried.items() if k != "sign"}
+        assert retried["sign"] == Account.params_sign(signed_params)
+        assert retried["sign"] != captured[0]["sign"]
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_get_devices_recovers_through_the_single_retry(
+        self, account
+    ) -> None:
+        """Test get_devices leans on request()'s single retry: one reclaim only."""
+        responses = [
+            {"returnCode": 1002, "msg": "Illegal token"},
+            {"returnCode": 0, "data": {CONF_DEVICES: [{"id": "d1"}]}},
+        ]
+
+        async def mock_request(method, url, **kwargs):
+            resp = MagicMock()
+            resp.json = AsyncMock(return_value=responses.pop(0))
+            return resp
+
+        account.http.request = mock_request
+
+        with patch.object(
+            account, "async_login", new_callable=AsyncMock, return_value=True
+        ) as mock_login:
+            devices = await account.get_devices()
+
+        assert devices == [{"id": "d1"}]
+        mock_login.assert_called_once()
+        assert responses == []

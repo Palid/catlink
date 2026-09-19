@@ -32,6 +32,7 @@
   - [Scooper PRO](#supported-devices-and-operations)
   - [PurePro Fountain](#supported-devices-and-operations)
 - [How to Configure?](#how-to-configure)
+- [One Session per Account](#one-session-per-account)
 - [Services (Optional)](#services-optional)
 - [Changelog](#changelog)
 - [How to contribute?](#how-to-contribute)
@@ -220,6 +221,18 @@ wget -O - https://get.hacs.vip | DOMAIN=catlink REPO_PATH=hasscc/catlink ARCHIVE
 Just use ConfigFlow. Enter your phonenumber (eg. +493034994004) and password. <br>
 That's it. <br>
 It will automatically discover your Region, Cats & Devices.
+
+## One Session per Account
+
+The CatLink Cloud allows one Session per Account. Signing in anywhere starts a new Session and ends the previous one, an Eviction. When you sign Home Assistant in on the same Account you use on your phone, each poll reclaims the Session and evicts the phone app, while opening the phone app evicts Home Assistant. Neither side keeps the Session for long.
+
+To keep both working, give Home Assistant its own Account:
+
+1. Create a second CatLink Account (a separate Email or Phone).
+2. In the CatLink phone app, share your Devices to that Account.
+3. Configure this integration with the dedicated Account, or re-authenticate an existing entry to switch it over.
+
+If Home Assistant detects repeated Evictions on one Account, it raises a repair pointing here so you can move to a dedicated Account.
 
 ## Services (Optional)
 

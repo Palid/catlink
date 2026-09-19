@@ -63,5 +63,11 @@
         "title": "Manage devices"
       }
     }
+  },
+  "issues": {
+    "repeated_eviction": {
+      "title": "CatLink keeps evicting your Session",
+      "description": "The CatLink Cloud allows one Session per Account, so each time Home Assistant reclaims the Session it ends the Session on your phone app, and each time you open the app it evicts Home Assistant. This has happened repeatedly. To stop it, create a second CatLink Account, share your Devices to it, and re-authenticate this integration with that dedicated Account."
+    }
   }
 }
