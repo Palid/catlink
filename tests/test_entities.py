@@ -149,6 +149,40 @@ class TestCatlinkEntity:
         assert entity._attr_entity_picture == "https://example.com/cat2.jpg"
 
 
+class TestCatlinkEntityListeners:
+    """Tests for the Device listener map an entity registers itself in."""
+
+    async def test_listener_keyed_by_unique_id(
+        self, hass, mock_device, mock_coordinator
+    ) -> None:
+        """Test the entity registers its listener under its unique id."""
+        mock_device.coordinator = mock_coordinator
+        entity = CatlinkSensorEntity("error", mock_device)
+        entity.coordinator = mock_coordinator
+        entity.hass = hass
+        entity.entity_id = "sensor.litter_box_599_eeff_error"
+
+        await entity.async_added_to_hass()
+
+        assert list(mock_device.listeners) == [entity.unique_id]
+
+    async def test_listener_not_duplicated_after_entity_id_rewrite(
+        self, hass, mock_device, mock_coordinator
+    ) -> None:
+        """Test a rewritten entity ID leaves a single listener behind."""
+        mock_device.coordinator = mock_coordinator
+        entity = CatlinkSensorEntity("error", mock_device)
+        entity.coordinator = mock_coordinator
+        entity.hass = hass
+        entity.entity_id = "sensor.litter_box_599_eeff_error"
+        await entity.async_added_to_hass()
+
+        entity.entity_id = "sensor.renamed_by_the_person"
+        await entity.async_added_to_hass()
+
+        assert list(mock_device.listeners) == [entity.unique_id]
+
+
 class TestCatlinkBinarySensorEntity:
     """Tests for CatlinkBinarySensorEntity."""
 
@@ -276,6 +310,7 @@ class TestCatlinkSelectEntity:
         )
         entity.coordinator = mock_coordinator
         entity.hass = hass
+        entity.entity_id = "select.litter_box_599_eeff_mode"
 
         result = await entity.async_select_option("manual")
         assert result is True
@@ -378,6 +413,7 @@ class TestCatlinkSwitchEntity:
         )
         entity.coordinator = mock_coordinator
         entity.hass = hass
+        entity.entity_id = "switch.litter_box_599_eeff_key_lock"
 
         await entity.async_turn_on()
         assert entity._attr_is_on is True
@@ -396,6 +432,7 @@ class TestCatlinkSwitchEntity:
         )
         entity.coordinator = mock_coordinator
         entity.hass = hass
+        entity.entity_id = "switch.litter_box_599_eeff_key_lock"
         entity._attr_is_on = True
 
         await entity.async_turn_off()
