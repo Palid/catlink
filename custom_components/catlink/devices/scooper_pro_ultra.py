@@ -106,7 +106,7 @@ class ScooperProUltraDevice(LitterDevice):
             "type": 0,
             "subType": 0,
         }
-        rsp = None
+        rdt = []
         try:
             rsp = await self.account.request(api, pms)
             data = rsp.get("data", {})
@@ -117,11 +117,11 @@ class ScooperProUltraDevice(LitterDevice):
                 rdt = parsed
             else:
                 rdt = data.get("records") or []
+            self.clear_warning("logs_fetch_failed")
         except (TypeError, ValueError) as exc:
-            rdt = []
-            _LOGGER.error("Got device logs for %s failed: %s", self.name, exc)
-        if not rdt:
-            _LOGGER.warning("Got device logs for %s failed: %s", self.name, rsp)
+            self.warn_once(
+                "logs_fetch_failed", "Got device logs for %s failed: %s", self.name, exc
+            )
         self.logs = rdt
         self._handle_listeners()
         return rdt
