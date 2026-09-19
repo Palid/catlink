@@ -4,6 +4,7 @@ from asyncio import TimeoutError
 import base64
 import datetime
 import hashlib
+import logging
 import time
 
 from aiohttp import ClientConnectorError
@@ -18,7 +19,10 @@ from homeassistant.helpers.storage import Store
 
 from ..const import (
     _LOGGER,
+    ACCOUNT_ID_PATH,
+    CONF_ACCOUNT_ID,
     CONF_API_BASE,
+    CONF_EMAIL,
     CONF_LANGUAGE,
     CONF_PHONE,
     CONF_PHONE_IAC,
@@ -30,7 +34,21 @@ from ..const import (
     SCAN_INTERVAL,
     SIGN_KEY,
 )
-from ..helpers import Helper
+from ..helpers import Helper, account_uid, format_api_error
+
+_SENSITIVE_LOG_KEYS = frozenset({"token", "email", "mobile", "phone", "password"})
+
+
+def _redact_for_log(value):
+    """Blank credential and identifier fields so a response is safe to log."""
+    if isinstance(value, dict):
+        return {
+            key: "***" if key in _SENSITIVE_LOG_KEYS else _redact_for_log(sub)
+            for key, sub in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_for_log(item) for item in value]
+    return value
 
 
 class Account:
@@ -57,17 +75,24 @@ class Account:
         return self._config.get(CONF_PHONE)
 
     @property
+    def email(self) -> str:
+        """Return the email of the account."""
+        return self._config.get(CONF_EMAIL)
+
+    @property
     def password(self) -> str:
-        """Return the password of the account."""
-        pwd = self._config.get(CONF_PASSWORD)
-        if len(pwd) <= 16:
-            pwd = self.encrypt_password(pwd)
-        return pwd
+        """Return the encrypted password of the account."""
+        return self.encrypt_password(self._config.get(CONF_PASSWORD))
+
+    @property
+    def account_id(self) -> str:
+        """Return the stable cloud id of the account."""
+        return self._config.get(CONF_ACCOUNT_ID) or ""
 
     @property
     def uid(self):
         """Return the unique id of the account."""
-        return f"{self._config.get(CONF_PHONE_IAC)}-{self.phone}"
+        return account_uid(self._config)
 
     @property
     def token(self) -> str:
@@ -93,6 +118,7 @@ class Account:
 
     async def request(self, api, pms=None, method="GET", **kwargs) -> dict:
         """Request the api."""
+        retried = kwargs.pop("_retried", False)
         method = method.upper()
         url = self.api_url(api)
         kws = {
@@ -122,49 +148,90 @@ class Account:
         try:
             req = await self.http.request(method, url, **kws)
             result = await req.json() or {}
-            _LOGGER.debug("API response %s %s: %s", method, api, result)
-            
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                _LOGGER.debug(
+                    "API response %s %s: %s", method, api, _redact_for_log(result)
+                )
+
             # Handle token expiration (1002: Illegal token)
-            if result.get("returnCode") == 1002 and not kwargs.get("_retried"):
-                _LOGGER.info("Token expired (1002), attempting re-login for %s", self.phone)
+            if result.get("returnCode") == 1002 and not retried:
+                _LOGGER.info(
+                    "Session expired (1002); re-signing in%s",
+                    f" for account {self.account_id}" if self.account_id else "",
+                )
                 if await self.async_login():
-                    kwargs["_retried"] = True
-                    return await self.request(api, pms, method, **kwargs)
-            
+                    return await self.request(api, pms, method, _retried=True, **kwargs)
+
             return result
         except (ClientConnectorError, TimeoutError) as exc:  # noqa: UP041
-            _LOGGER.error("Request api failed: %s", [method, url, pms, exc])
+            _LOGGER.error("Request api failed: %s", [method, url, api, exc])
         return {}
 
     async def async_login(self) -> bool:
-        """Login the account."""
-        pms = {
-            "platform": "ANDROID",
-            "internationalCode": self._config.get(CONF_PHONE_IAC),
-            "mobile": str(self.phone),
-            "password": self.password,
-        }
+        """Sign in with the account identifier the entry holds."""
+        if self.email:
+            api = "login/email/v2"
+            pms = {
+                "email": self.email,
+                "platform": "ANDROID",
+                "os": "HomeAssistant-catlink",
+                "password": self.password,
+            }
+        else:
+            api = "login/password"
+            pms = {
+                "platform": "ANDROID",
+                "internationalCode": self._config.get(CONF_PHONE_IAC),
+                "mobile": str(self.phone),
+                "password": self.password,
+            }
         self._config.update(
             {
                 CONF_TOKEN: None,
             }
         )
-        rsp = await self.request("login/password", pms, "POST")
+        rsp = await self.request(api, pms, "POST")
         tok = rsp.get("data", {}).get("token")
         if not tok:
-            _LOGGER.error("Login %s failed: %s", self.phone, [rsp, pms])
+            _LOGGER.error("Sign-in failed: %s", format_api_error(rsp))
             return False
         self._config.update(
             {
                 CONF_TOKEN: tok,
             }
         )
+        await self.async_fetch_account_id()
         await self.async_check_auth(True)
         return True
 
+    async def async_fetch_account_id(self) -> str:
+        """Read the stable cloud id of the account from its profile."""
+        rsp = await self.request("token/user/info", _retried=True)
+        account_id = rsp.get("data")
+        for key in ACCOUNT_ID_PATH:
+            account_id = (account_id or {}).get(key)
+        if account_id:
+            self._config.update(
+                {
+                    CONF_ACCOUNT_ID: str(account_id),
+                }
+            )
+        else:
+            _LOGGER.warning(
+                "Account profile has no %s (returnCode: %s)",
+                ".".join(ACCOUNT_ID_PATH),
+                rsp.get("returnCode"),
+            )
+        return self.account_id
+
     async def async_check_auth(self, save=False) -> dict:
         """Check the auth of the account."""
-        fnm = f"{DOMAIN}/auth-{self.uid}.json"
+        uid = self.uid
+        if not uid:
+            if not save:
+                await self.async_login()
+            return {}
+        fnm = f"{DOMAIN}/auth-{uid}.json"
         sto = Store(self.hass, 1, fnm)
         old = await sto.async_load() or {}
         if save:
