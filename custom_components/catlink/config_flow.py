@@ -25,10 +25,13 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     API_SERVERS,
+    CONF_ACCOUNT_ID,
     CONF_API_BASE,
     CONF_DEVICE_IDS,
+    CONF_EMAIL,
     CONF_PHONE,
     CONF_PHONE_IAC,
+    CONF_SWITCH_IDENTIFIER,
     CONF_UPDATE_INTERVAL,
     DOMAIN,
     ERROR_INVALID_AUTH,
@@ -49,6 +52,14 @@ def _device_label(dat: dict, supported: bool) -> str:
     return f"{name} ({device_type}) - {suffix}"
 
 
+def _account_identifier(data: Mapping[str, Any]) -> str:
+    """Build the account identifier an entry signs in with."""
+    email = data.get(CONF_EMAIL)
+    if email:
+        return email
+    return f"+{data.get(CONF_PHONE_IAC, '')}{data.get(CONF_PHONE, '')}"
+
+
 class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a CatLink config flow."""
 
@@ -67,6 +78,8 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
         super().__init__()
         self._account: Account | None = None
         self._config: dict[str, Any] = {}
+        self._title: str = ""
+        self._configured_entry: ConfigEntry | None = None
         self._discovered_devices: list[dict] = []
         self._device_options: dict[str, str] = {}
         self._supported_ids: list[str] = []
@@ -74,13 +87,64 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reauth(
         self, entry_data: Mapping[str, Any]
     ) -> ConfigFlowResult:
-        """Perform reauth upon an authentication error."""
-        return await self.async_step_user()
+        """Route re-authentication to the form matching the entry's sign-in method."""
+        if entry_data.get(CONF_EMAIL):
+            return await self.async_step_email()
+        return await self.async_step_phone()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle the initial step."""
+        """Ask which sign-in method the account uses."""
+        return self.async_show_menu(step_id="user", menu_options=["email", "phone"])
+
+    async def async_step_email(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle sign-in with an email and password."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            email = user_input[CONF_EMAIL].strip()
+            password = user_input[CONF_PASSWORD]
+
+            region, account_id = await discover_region(
+                self.hass, password=password, email=email
+            )
+            if region is None:
+                errors["base"] = ERROR_INVALID_AUTH
+            else:
+                config = {
+                    CONF_API_BASE: API_SERVERS[region],
+                    CONF_EMAIL: email,
+                    CONF_PASSWORD: password,
+                }
+                if account_id:
+                    config[CONF_ACCOUNT_ID] = account_id
+                return await self._async_signed_in(config, email)
+
+        reauth_entry = (
+            self._get_reauth_entry() if self.source == SOURCE_REAUTH else None
+        )
+        default_email = reauth_entry.data.get(CONF_EMAIL, "") if reauth_entry else ""
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_EMAIL, default=default_email): str,
+                vol.Required(CONF_PASSWORD): str,
+            }
+        )
+
+        return self.async_show_form(
+            step_id="email",
+            data_schema=schema,
+            errors=errors,
+        )
+
+    async def async_step_phone(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle sign-in with a phone number and password."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -88,49 +152,23 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
             password = user_input[CONF_PASSWORD]
 
             phone_iac, phone_number = parse_phone_number(phone_raw)
-            region = await discover_region(self.hass, phone_iac, phone_number, password)
+            region, account_id = await discover_region(
+                self.hass, phone_iac, phone_number, password
+            )
             if region is None:
                 errors["base"] = ERROR_INVALID_AUTH
             else:
-                api_base = API_SERVERS[region]
                 config = {
-                    CONF_API_BASE: api_base,
+                    CONF_API_BASE: API_SERVERS[region],
                     CONF_PHONE: phone_number,
                     CONF_PHONE_IAC: phone_iac,
                     CONF_PASSWORD: password,
                 }
-                account = Account(self.hass, config)
-                await account.async_check_auth()
-
-                self._account = account
-                self._config = config
-
-                if self.source == SOURCE_REAUTH:
-                    return self.async_update_reload_and_abort(
-                        self._get_reauth_entry(), data=self._config
-                    )
-
-                devices = await account.get_devices()
-                if not devices:
-                    return self.async_create_entry(
-                        title=f"+{phone_iac}{phone_number}",
-                        data=self._config,
-                        options={CONF_DEVICE_IDS: [], CONF_UPDATE_INTERVAL: 60},
-                    )
-
-                self._discovered_devices = devices
-                self._device_options = {}
-                self._supported_ids = []
-                for dat in devices:
-                    did = dat.get("id")
-                    if not did:
-                        continue
-                    supported = dat.get("deviceType", "") in SUPPORTED_DEVICE_TYPES
-                    self._device_options[did] = _device_label(dat, supported)
-                    if supported:
-                        self._supported_ids.append(did)
-
-                return await self.async_step_discovery()
+                if account_id:
+                    config[CONF_ACCOUNT_ID] = account_id
+                return await self._async_signed_in(
+                    config, f"+{phone_iac}{phone_number}"
+                )
 
         reauth_entry = (
             self._get_reauth_entry() if self.source == SOURCE_REAUTH else None
@@ -149,9 +187,105 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
         return self.async_show_form(
-            step_id="user",
+            step_id="phone",
             data_schema=schema,
             errors=errors,
+        )
+
+    async def _async_signed_in(
+        self, config: dict[str, Any], title: str
+    ) -> ConfigFlowResult:
+        """Settle the entry this sign-in belongs to, then discover its devices."""
+        account = Account(self.hass, config)
+        await account.async_check_auth()
+
+        self._account = account
+        self._config = config
+        self._title = title
+
+        if self.source == SOURCE_REAUTH:
+            entry = self._get_reauth_entry()
+            known = entry.data.get(CONF_ACCOUNT_ID)
+            if known and known != account.account_id:
+                return self.async_abort(reason="wrong_account")
+            if account.uid:
+                other = self.hass.config_entries.async_entry_for_domain_unique_id(
+                    DOMAIN, account.uid
+                )
+                if other is not None and other.entry_id != entry.entry_id:
+                    return self.async_abort(reason="already_configured")
+            return self.async_update_reload_and_abort(
+                entry,
+                unique_id=account.uid or entry.unique_id,
+                title=title,
+                data=config,
+            )
+
+        configured = (
+            self.hass.config_entries.async_entry_for_domain_unique_id(
+                DOMAIN, account.uid
+            )
+            if account.uid
+            else None
+        )
+        if configured is not None:
+            if _account_identifier(configured.data) == title:
+                return self.async_abort(reason="already_configured")
+            self._configured_entry = configured
+            return await self.async_step_switch_identifier()
+
+        if account.uid:
+            await self.async_set_unique_id(account.uid)
+        else:
+            await self.async_set_unique_id(title)
+            self._abort_if_unique_id_configured()
+
+        devices = await account.get_devices()
+        if not devices:
+            return self.async_create_entry(
+                title=title,
+                data=config,
+                options={CONF_DEVICE_IDS: [], CONF_UPDATE_INTERVAL: 60},
+            )
+
+        self._discovered_devices = devices
+        self._device_options = {}
+        self._supported_ids = []
+        for dat in devices:
+            did = dat.get("id")
+            if not did:
+                continue
+            supported = dat.get("deviceType", "") in SUPPORTED_DEVICE_TYPES
+            self._device_options[did] = _device_label(dat, supported)
+            if supported:
+                self._supported_ids.append(did)
+
+        return await self.async_step_discovery()
+
+    async def async_step_switch_identifier(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Offer to move the configured entry to the account identifier just used."""
+        if user_input is not None:
+            if not user_input[CONF_SWITCH_IDENTIFIER]:
+                return self.async_abort(reason="already_configured")
+            return self.async_update_reload_and_abort(
+                self._configured_entry,
+                unique_id=self._account.uid,
+                title=self._title,
+                data=self._config,
+                reason="identifier_switched",
+            )
+
+        return self.async_show_form(
+            step_id="switch_identifier",
+            data_schema=vol.Schema(
+                {vol.Required(CONF_SWITCH_IDENTIFIER, default=True): bool}
+            ),
+            description_placeholders={
+                "current_identifier": _account_identifier(self._configured_entry.data),
+                "new_identifier": self._title,
+            },
         )
 
     async def async_step_discovery(
@@ -161,11 +295,8 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             selected_ids = user_input.get(CONF_DEVICE_IDS, [])
             update_interval = user_input.get(CONF_UPDATE_INTERVAL, 60)
-            uid = self._account.uid if self._account else ""
-            await self.async_set_unique_id(uid)
-            self._abort_if_unique_id_configured()
             return self.async_create_entry(
-                title=f"+{self._config[CONF_PHONE_IAC]}{self._config[CONF_PHONE]}",
+                title=self._title,
                 data=self._config,
                 options={
                     CONF_DEVICE_IDS: selected_ids,
