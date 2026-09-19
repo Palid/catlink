@@ -14,8 +14,9 @@ from cryptography.hazmat.primitives.asymmetric import padding
 
 from homeassistant.const import CONF_DEVICES, CONF_PASSWORD, CONF_TOKEN
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import aiohttp_client
+from homeassistant.helpers import aiohttp_client, issue_registry as ir
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 from ..const import (
     _LOGGER,
@@ -38,6 +39,13 @@ from ..helpers import Helper, account_uid, format_api_error
 
 _SENSITIVE_LOG_KEYS = frozenset({"token", "email", "mobile", "phone", "password"})
 
+EVICTION_REPAIR_THRESHOLD = 3
+EVICTION_WINDOW = datetime.timedelta(minutes=60)
+EVICTION_QUIET_PERIOD = datetime.timedelta(hours=24)
+EVICTION_LEARN_MORE_URL = (
+    "https://github.com/Palid/catlink#one-session-per-account"
+)
+
 
 def _redact_for_log(value):
     """Blank credential and identifier fields so a response is safe to log."""
@@ -59,6 +67,8 @@ class Account:
         self._config = config
         self.hass = hass
         self.http = aiohttp_client.async_create_clientsession(hass, auto_cleanup=False)
+        self._eviction_times: list[datetime.datetime] = []
+        self._eviction_repair_active = False
 
     def get_config(self, key, default=None) -> str:
         """Return the config of the account."""
@@ -134,17 +144,18 @@ class Account:
         kws.update(kwargs)
         if pms is None:
             pms = {}
-        pms["noncestr"] = int(time.time() * 1000)
+        signed = dict(pms)
+        signed["noncestr"] = int(time.time() * 1000)
         if self.token:
-            pms[CONF_TOKEN] = self.token
-        pms["sign"] = self.params_sign(pms)
+            signed[CONF_TOKEN] = self.token
+        signed["sign"] = self.params_sign(signed)
         if method in ["GET"]:
-            kws["params"] = pms
+            kws["params"] = signed
         elif method in ["POST_GET"]:
             method = "POST"
-            kws["params"] = pms
+            kws["params"] = signed
         else:
-            kws["data"] = pms
+            kws["data"] = signed
         try:
             req = await self.http.request(method, url, **kws)
             result = await req.json() or {}
@@ -153,19 +164,80 @@ class Account:
                     "API response %s %s: %s", method, api, _redact_for_log(result)
                 )
 
-            # Handle token expiration (1002: Illegal token)
             if result.get("returnCode") == 1002 and not retried:
-                _LOGGER.info(
-                    "Session expired (1002); re-signing in%s",
-                    f" for account {self.account_id}" if self.account_id else "",
-                )
+                self._note_eviction()
+                _LOGGER.info("Session evicted (1002); reclaiming the Session")
                 if await self.async_login():
                     return await self.request(api, pms, method, _retried=True, **kwargs)
+                self._start_reauth()
+            else:
+                self._clear_eviction_repair_if_quiet()
 
             return result
         except (ClientConnectorError, TimeoutError) as exc:  # noqa: UP041
             _LOGGER.error("Request api failed: %s", [method, url, api, exc])
         return {}
+
+    def _note_eviction(self) -> None:
+        """Record an Eviction and raise the repair once they cluster."""
+        now = dt_util.utcnow()
+        self._eviction_times = [
+            t for t in self._eviction_times if now - t < EVICTION_QUIET_PERIOD
+        ]
+        self._eviction_times.append(now)
+        recent = [t for t in self._eviction_times if now - t < EVICTION_WINDOW]
+        if len(recent) >= EVICTION_REPAIR_THRESHOLD:
+            self._raise_eviction_repair()
+
+    def _clear_eviction_repair_if_quiet(self) -> None:
+        """Drop the repair once the Account has gone quiet for the quiet period."""
+        if not self._eviction_repair_active:
+            return
+        now = dt_util.utcnow()
+        self._eviction_times = [
+            t for t in self._eviction_times if now - t < EVICTION_QUIET_PERIOD
+        ]
+        if not self._eviction_times:
+            self._clear_eviction_repair()
+
+    def _config_entry(self):
+        """Return the config entry this Account belongs to, if it is set up."""
+        if not self.uid:
+            return None
+        return self.hass.config_entries.async_entry_for_domain_unique_id(
+            DOMAIN, self.uid
+        )
+
+    def _raise_eviction_repair(self) -> None:
+        """Explain the one-Session-per-Account rule through a repair issue."""
+        entry = self._config_entry()
+        if entry is None or self._eviction_repair_active:
+            return
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            f"repeated_eviction_{entry.entry_id}",
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="repeated_eviction",
+            learn_more_url=EVICTION_LEARN_MORE_URL,
+        )
+        self._eviction_repair_active = True
+
+    def _clear_eviction_repair(self) -> None:
+        """Withdraw the repair issue."""
+        entry = self._config_entry()
+        if entry is not None:
+            ir.async_delete_issue(
+                self.hass, DOMAIN, f"repeated_eviction_{entry.entry_id}"
+            )
+        self._eviction_repair_active = False
+
+    def _start_reauth(self) -> None:
+        """Route a failed reclaim to re-authentication for the entry."""
+        entry = self._config_entry()
+        if entry is not None:
+            entry.async_start_reauth(self.hass)
 
     async def async_login(self) -> bool:
         """Sign in with the account identifier the entry holds."""
@@ -262,10 +334,6 @@ class Account:
                 return []
         api = "token/device/union/list/sorted"
         rsp = await self.request(api, {"type": "NONE"})
-        eno = rsp.get("returnCode", 0)
-        if eno == 1002:  # Illegal token
-            if await self.async_login():
-                rsp = await self.request(api, {"type": "NONE"})
         dls = rsp.get("data", {}).get(CONF_DEVICES) or []
         if not dls:
             _LOGGER.warning("Got devices for %s failed: %s", self.phone, rsp)
@@ -281,10 +349,6 @@ class Account:
         if timezone_id:
             params["timezoneId"] = timezone_id
         rsp = await self.request(api, params)
-        eno = rsp.get("returnCode", 0)
-        if eno == 1002:  # Illegal token
-            if await self.async_login():
-                rsp = await self.request(api, params)
         cats = rsp.get("data", {}).get("cats") or []
         if not cats:
             _LOGGER.warning("Got cats for %s failed: %s", self.phone, rsp)
@@ -310,10 +374,6 @@ class Account:
         if timezone_id:
             params["timezoneId"] = timezone_id
         rsp = await self.request(api, params)
-        eno = rsp.get("returnCode", 0)
-        if eno == 1002:  # Illegal token
-            if await self.async_login():
-                rsp = await self.request(api, params)
         return rsp.get("data") or {}
 
     @staticmethod
