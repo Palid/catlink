@@ -1,6 +1,7 @@
 """Tests for CatLink Account module."""
 
 from datetime import timedelta
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -546,3 +547,24 @@ class TestAccountAliyunChannel:
         code = await account._async_aliyun_auth_code()  # noqa: SLF001
 
         assert code == ""
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_auth_code_response_is_not_logged_in_clear(
+        self, account, caplog
+    ) -> None:
+        """Test the auth-code value is kept out of the shared debug line."""
+
+        async def fake_http_request(method, url, **kws):
+            assert "_redact_response" not in kws
+            resp = MagicMock()
+            resp.json = AsyncMock(return_value={"data": "SECRETAUTHCODE"})
+            return resp
+
+        account.http.request = fake_http_request
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.catlink.const"):
+            code = await account._async_aliyun_auth_code()  # noqa: SLF001
+
+        assert code == "SECRETAUTHCODE"
+        assert "SECRETAUTHCODE" not in caplog.text
+        assert "<redacted>" in caplog.text

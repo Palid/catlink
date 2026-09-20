@@ -110,6 +110,7 @@ class Account:
             },
         }
         kws.update(kwargs)
+        redact_response = kws.pop("_redact_response", False)
         if pms is None:
             pms = {}
         pms["noncestr"] = int(time.time() * 1000)
@@ -126,7 +127,10 @@ class Account:
         try:
             req = await self.http.request(method, url, **kws)
             result = await req.json() or {}
-            _LOGGER.debug("API response %s %s: %s", method, api, result)
+            if redact_response:
+                _LOGGER.debug("API response %s %s: <redacted>", method, api)
+            else:
+                _LOGGER.debug("API response %s %s: %s", method, api, result)
             
             # Handle token expiration (1002: Illegal token)
             if result.get("returnCode") == 1002 and not kwargs.get("_retried"):
@@ -265,11 +269,17 @@ class Account:
         return self._aliyun
 
     async def _async_aliyun_auth_code(self) -> str:
-        """Fetch a fresh Aliyun authorisation code from the CatLink Cloud."""
-        rsp = await self.request(API_ALIYUN_AUTH_CODE, {}, "POST")
+        """Fetch a fresh Aliyun authorisation code from the CatLink Cloud.
+
+        The code arrives as a bare ``data`` string, so the response is kept out
+        of the shared debug line rather than logged in clear.
+        """
+        rsp = await self.request(
+            API_ALIYUN_AUTH_CODE, {}, "POST", _redact_response=True
+        )
         code = rsp.get("data")
         if not code:
-            _LOGGER.error("Aliyun auth code request failed for %s: %s", self.phone, rsp)
+            _LOGGER.error("Aliyun auth code request failed for %s", self.phone)
             return ""
         return code
 
