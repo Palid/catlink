@@ -13,6 +13,7 @@ from aiohttp import ClientError
 from custom_components.catlink.modules.aliyun_channel import (
     AliyunAuthFailed,
     AliyunChannel,
+    AliyunError,
     AliyunRequestFailed,
 )
 import pytest
@@ -27,13 +28,15 @@ SET_PATH = "/living/thing/properties/set"
 class FakeResponse:
     """Minimal stand-in for an aiohttp ClientResponse."""
 
-    def __init__(self, payload: dict) -> None:
-        """Store the payload to return from json()."""
+    def __init__(self, payload) -> None:
+        """Store the payload to return from json(), or an error to raise."""
         self._payload = payload
         self.status = 200
 
     async def json(self, **_kwargs) -> dict:
-        """Return the recorded payload."""
+        """Return the recorded payload, or raise a configured decode error."""
+        if isinstance(self._payload, Exception):
+            raise self._payload
         return self._payload
 
 
@@ -300,4 +303,38 @@ async def test_create_session_failure_is_auth_failed() -> None:
     channel = make_channel(session, (await _counting_auth_code([])))
 
     with pytest.raises(AliyunAuthFailed):
+        await channel.async_open()
+
+
+async def test_non_json_body_becomes_request_failed() -> None:
+    """A non-JSON body (a decode error) surfaces as AliyunRequestFailed, not ValueError."""
+    session = FakeSession()
+    session.route(REGION_PATH, _region_ok())
+    session.route(CREATE_PATH, _session_data())
+    session.route(GET_PATH, json.JSONDecodeError("Expecting value", "<html>", 0))
+    channel = make_channel(session, (await _counting_auth_code([])))
+    await channel.async_open()
+
+    with pytest.raises(AliyunRequestFailed):
+        await channel.async_get_properties("IOTID26CHAR")
+
+
+async def test_incomplete_session_is_request_failed() -> None:
+    """A 200 missing a session field raises an AliyunError, never a bare KeyError."""
+    session = FakeSession()
+    session.route(REGION_PATH, _region_ok())
+    session.route(
+        CREATE_PATH,
+        {
+            "code": 200,
+            "data": {
+                "identityId": "identity-1",
+                "iotToken": "tok1",
+                "iotTokenExpire": 86400,
+            },
+        },
+    )
+    channel = make_channel(session, (await _counting_auth_code([])))
+
+    with pytest.raises(AliyunError):
         await channel.async_open()

@@ -35,6 +35,15 @@ _PROPERTIES_SET_PATH = "/living/thing/properties/set"
 
 _SESSION_EXPIRED_CODES = frozenset({2401, 29003, 460})
 
+# Every field createSessionByAuthCode / checkOrRefreshSession must return on a 200.
+_SESSION_FIELDS = (
+    "identityId",
+    "iotToken",
+    "iotTokenExpire",
+    "refreshToken",
+    "refreshTokenExpire",
+)
+
 # Headers the gateway signature drops before building its canonical header block.
 _MOVE_HEADERS = frozenset(
     {
@@ -219,6 +228,10 @@ class AliyunChannel:
             raise AliyunAuthFailed(
                 payload.get("message") or "createSessionByAuthCode rejected"
             )
+        if not self._has_session_fields(data):
+            raise AliyunRequestFailed(
+                "createSessionByAuthCode returned an incomplete session"
+            )
         self._apply_session(data)
 
     async def _async_refresh_locked(self) -> None:
@@ -240,9 +253,14 @@ class AliyunChannel:
                 payload.get("message") or "refresh rejected", payload.get("code")
             )
         data = payload.get("data") or {}
-        if not data.get("iotToken") or not data.get("identityId"):
+        if not self._has_session_fields(data):
             raise AliyunRequestFailed("refresh returned an incomplete session")
         self._apply_session(data)
+
+    @staticmethod
+    def _has_session_fields(data: dict) -> bool:
+        """Return whether a 200 carries every field a session needs."""
+        return all(data.get(field) not in (None, "") for field in _SESSION_FIELDS)
 
     def _apply_session(self, data: dict) -> None:
         """Store a session bundle and stamp its local issue time."""
@@ -273,10 +291,15 @@ class AliyunChannel:
         try:
             resp = await self._session.post(url, data=body, headers=headers)
             payload = await resp.json(content_type=None)
-        except (aiohttp.ClientError, TimeoutError) as exc:
+        except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
             raise AliyunRequestFailed(f"transport error: {exc}") from exc
-        _LOGGER.debug("Aliyun %s response: %s", path, payload)
-        return payload or {}
+        payload = payload or {}
+        _LOGGER.debug(
+            "Aliyun %s response code: %s",
+            path,
+            payload.get("code") if isinstance(payload, dict) else None,
+        )
+        return payload
 
     def _build_headers(self, host: str, path: str, body: str) -> dict[str, str]:
         """Build the fixed gateway headers and append the signature."""
