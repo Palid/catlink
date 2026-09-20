@@ -23,6 +23,8 @@ from ..const import (
     ACCOUNT_ID_PATH,
     CONF_ACCOUNT_ID,
     CONF_API_BASE,
+    CONF_CLIENT_SERVER,
+    CONF_COUNTRY_CODE,
     CONF_EMAIL,
     CONF_LANGUAGE,
     CONF_PHONE,
@@ -98,6 +100,16 @@ class Account:
     def account_id(self) -> str:
         """Return the stable cloud id of the account."""
         return self._config.get(CONF_ACCOUNT_ID) or ""
+
+    @property
+    def client_server(self) -> str | None:
+        """Return the profile's clientServer market code, if the profile named one."""
+        return self._config.get(CONF_CLIENT_SERVER)
+
+    @property
+    def country_code(self) -> str | None:
+        """Return the profile's country code, if the profile named one."""
+        return self._config.get(CONF_COUNTRY_CODE)
 
     @property
     def uid(self):
@@ -282,6 +294,13 @@ class Account:
         account_id = rsp.get("data")
         for key in ACCOUNT_ID_PATH:
             account_id = (account_id or {}).get(key)
+        app_user = (rsp.get("data") or {}).get("appUser") or {}
+        client_server = app_user.get("clientServer")
+        if client_server is not None:
+            self._config[CONF_CLIENT_SERVER] = str(client_server)
+        country_code = app_user.get("countryCode")
+        if country_code is not None:
+            self._config[CONF_COUNTRY_CODE] = country_code
         if account_id:
             self._config.update(
                 {
