@@ -1,0 +1,303 @@
+"""Tests for the Aliyun Channel client, entirely against a fake aiohttp session."""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import hashlib
+import json
+from types import SimpleNamespace
+from urllib.parse import urlparse
+
+from aiohttp import ClientError
+from custom_components.catlink.modules.aliyun_channel import (
+    AliyunAuthFailed,
+    AliyunChannel,
+    AliyunRequestFailed,
+)
+import pytest
+
+REGION_PATH = "/living/account/region/get"
+CREATE_PATH = "/account/createSessionByAuthCode"
+REFRESH_PATH = "/account/checkOrRefreshSession"
+GET_PATH = "/thing/properties/get"
+SET_PATH = "/living/thing/properties/set"
+
+
+class FakeResponse:
+    """Minimal stand-in for an aiohttp ClientResponse."""
+
+    def __init__(self, payload: dict) -> None:
+        """Store the payload to return from json()."""
+        self._payload = payload
+        self.status = 200
+
+    async def json(self, **_kwargs) -> dict:
+        """Return the recorded payload."""
+        return self._payload
+
+
+class FakeSession:
+    """Records every request and answers from per-path handlers."""
+
+    def __init__(self) -> None:
+        """Initialize the request log and handler map."""
+        self.requests: list[SimpleNamespace] = []
+        self._handlers: dict[str, object] = {}
+        self.error: Exception | None = None
+
+    def route(self, path: str, handler) -> None:
+        """Register a handler (payload dict or callable) for a path."""
+        self._handlers[path] = handler
+
+    def count(self, path: str) -> int:
+        """Return how many requests hit a path."""
+        return sum(1 for r in self.requests if r.path == path)
+
+    def last(self, path: str) -> SimpleNamespace:
+        """Return the most recent request for a path."""
+        return next(r for r in reversed(self.requests) if r.path == path)
+
+    async def post(self, url, data=None, headers=None):
+        """Record the request and return the routed payload."""
+        await asyncio.sleep(0)
+        if self.error is not None:
+            raise self.error
+        path = urlparse(url).path
+        body = json.loads(data) if data else {}
+        self.requests.append(
+            SimpleNamespace(url=url, path=path, headers=headers, body=body)
+        )
+        handler = self._handlers.get(path)
+        payload = handler(body) if callable(handler) else handler
+        return FakeResponse(payload or {})
+
+
+def _session_data(iot_expire=86400, refresh_expire=864000, token="tok1", refresh="ref1"):
+    """Return a createSession/refresh data body with the given lifetimes."""
+    return {
+        "code": 200,
+        "data": {
+            "identityId": "identity-1",
+            "iotToken": token,
+            "iotTokenExpire": iot_expire,
+            "refreshToken": refresh,
+            "refreshTokenExpire": refresh_expire,
+        },
+    }
+
+
+def _region_ok():
+    """Return a region/get success body."""
+    return {
+        "code": 200,
+        "data": {
+            "apiGatewayEndpoint": "gw.example.com",
+            "oaApiGatewayEndpoint": "oa.example.com",
+        },
+    }
+
+
+def make_channel(session, auth_code_fn, country="SG"):
+    """Build a channel wired to the fake session with dummy credentials."""
+    return AliyunChannel(
+        None,
+        session,
+        country,
+        auth_code_fn,
+        app_key="test-key",
+        app_secret="test-secret",
+    )
+
+
+async def _counting_auth_code(counter, code="AUTHCODE1"):
+    """Return an auth-code callable that bumps a mutable counter."""
+
+    async def _fn():
+        counter.append(code)
+        return code
+
+    return _fn
+
+
+async def test_opens_session_from_auth_code() -> None:
+    """A session opens: region lookup then createSessionByAuthCode."""
+    session = FakeSession()
+    session.route(REGION_PATH, _region_ok())
+    session.route(CREATE_PATH, _session_data())
+    calls: list[str] = []
+
+    async def auth_code():
+        calls.append("code")
+        return "AUTHCODE1"
+
+    channel = make_channel(session, auth_code)
+    await channel.async_open()
+
+    assert calls == ["code"]
+    assert session.count(REGION_PATH) == 1
+    assert session.count(CREATE_PATH) == 1
+    create = session.last(CREATE_PATH)
+    assert create.body["request"]["apiVer"] == "1.0.4"
+    assert create.body["params"]["request"] == {
+        "authCode": "AUTHCODE1",
+        "accountType": "OA_SESSION",
+        "appKey": "test-key",
+    }
+    assert create.headers["x-ca-key"] == "test-key"
+    region = session.last(REGION_PATH)
+    assert region.body["params"] == {
+        "authCode": "AUTHCODE1",
+        "type": "THIRD_AUTHCODE",
+        "countryCode": "SG",
+    }
+
+
+async def test_get_properties_for_iot_id() -> None:
+    """Reading properties hits /thing/properties/get and flattens data.<id>.value."""
+    session = FakeSession()
+    session.route(REGION_PATH, _region_ok())
+    session.route(CREATE_PATH, _session_data())
+    session.route(
+        GET_PATH,
+        {
+            "code": 200,
+            "data": {
+                "RunStatus": {"value": "runStatus=0&biz=0"},
+                "CatLitterBalance": {"value": "55"},
+            },
+        },
+    )
+    channel = make_channel(session, (await _counting_auth_code([])))
+    await channel.async_open()
+
+    result = await channel.async_get_properties("IOTID26CHAR")
+
+    assert result == {
+        "RunStatus": "runStatus=0&biz=0",
+        "CatLitterBalance": "55",
+    }
+    req = session.last(GET_PATH)
+    assert req.body["request"]["apiVer"] == "1.0.0"
+    assert req.body["request"]["iotToken"] == "tok1"
+    assert req.body["params"] == {"iotId": "IOTID26CHAR"}
+    expected_md5 = base64.b64encode(
+        hashlib.md5(json.dumps(req.body).encode()).digest()
+    ).decode()
+    assert req.headers["content-md5"] == expected_md5
+
+
+async def test_set_properties_for_iot_id() -> None:
+    """Writing properties hits /living/thing/properties/set with iotId and items."""
+    session = FakeSession()
+    session.route(REGION_PATH, _region_ok())
+    session.route(CREATE_PATH, _session_data())
+    session.route(SET_PATH, {"code": 200, "data": {}})
+    channel = make_channel(session, (await _counting_auth_code([])))
+    await channel.async_open()
+
+    await channel.async_set_properties(
+        "IOTID26CHAR", {"RunStatus": "runStatus=1&biz=1"}
+    )
+
+    req = session.last(SET_PATH)
+    assert req.body["request"]["apiVer"] == "1.0.0"
+    assert req.body["params"] == {
+        "iotId": "IOTID26CHAR",
+        "items": {"RunStatus": "runStatus=1&biz=1"},
+    }
+
+
+async def test_refreshes_ahead_of_expiry() -> None:
+    """A token inside the hour margin triggers exactly one checkOrRefreshSession."""
+    session = FakeSession()
+    session.route(REGION_PATH, _region_ok())
+    session.route(CREATE_PATH, _session_data(iot_expire=100, refresh_expire=864000))
+    session.route(REFRESH_PATH, _session_data(iot_expire=86400, token="tok2"))
+    session.route(GET_PATH, {"code": 200, "data": {}})
+    channel = make_channel(session, (await _counting_auth_code([])))
+    await channel.async_open()
+
+    await channel.async_get_properties("IOTID26CHAR")
+
+    assert session.count(REFRESH_PATH) == 1
+    assert session.count(CREATE_PATH) == 1
+    assert session.last(GET_PATH).body["request"]["iotToken"] == "tok2"
+
+
+async def test_refresh_happens_once_under_concurrency() -> None:
+    """Ten concurrent reads refresh the session exactly once."""
+    session = FakeSession()
+    session.route(REGION_PATH, _region_ok())
+    session.route(CREATE_PATH, _session_data(iot_expire=100, refresh_expire=864000))
+    session.route(REFRESH_PATH, _session_data(iot_expire=86400, token="tok2"))
+    session.route(GET_PATH, {"code": 200, "data": {}})
+    channel = make_channel(session, (await _counting_auth_code([])))
+    await channel.async_open()
+
+    await asyncio.gather(
+        *(channel.async_get_properties("IOTID26CHAR") for _ in range(10))
+    )
+
+    assert session.count(REFRESH_PATH) == 1
+    assert session.count(GET_PATH) == 10
+
+
+async def test_refresh_failure_falls_back_to_new_auth_code() -> None:
+    """A rejected refresh (2401) falls back to a fresh auth code and createSession."""
+    session = FakeSession()
+    session.route(REGION_PATH, _region_ok())
+    session.route(CREATE_PATH, _session_data(iot_expire=100, refresh_expire=864000))
+    session.route(REFRESH_PATH, {"code": 2401, "message": "session expired"})
+    session.route(GET_PATH, {"code": 200, "data": {}})
+    calls: list[str] = []
+
+    async def auth_code():
+        calls.append("code")
+        return "AUTHCODE1"
+
+    channel = make_channel(session, auth_code)
+    await channel.async_open()
+
+    await channel.async_get_properties("IOTID26CHAR")
+
+    assert len(calls) == 2
+    assert session.count(CREATE_PATH) == 2
+    assert session.count(REFRESH_PATH) == 1
+
+
+async def test_total_failure_starts_reauth() -> None:
+    """When the auth-code callable raises, AliyunAuthFailed propagates."""
+    session = FakeSession()
+
+    async def auth_code():
+        raise RuntimeError("catlink cloud down")
+
+    channel = make_channel(session, auth_code)
+
+    with pytest.raises(AliyunAuthFailed):
+        await channel.async_open()
+
+
+async def test_transport_error_becomes_request_failed() -> None:
+    """An aiohttp transport error surfaces as AliyunRequestFailed, never a raw client error."""
+    session = FakeSession()
+    session.route(REGION_PATH, _region_ok())
+    session.route(CREATE_PATH, _session_data())
+    channel = make_channel(session, (await _counting_auth_code([])))
+    await channel.async_open()
+    session.error = ClientError("boom")
+
+    with pytest.raises(AliyunRequestFailed):
+        await channel.async_get_properties("IOTID26CHAR")
+
+
+async def test_create_session_failure_is_auth_failed() -> None:
+    """A rejected createSessionByAuthCode raises AliyunAuthFailed for reauth."""
+    session = FakeSession()
+    session.route(REGION_PATH, _region_ok())
+    session.route(CREATE_PATH, {"code": 29020, "message": "bad auth code"})
+    channel = make_channel(session, (await _counting_auth_code([])))
+
+    with pytest.raises(AliyunAuthFailed):
+        await channel.async_open()

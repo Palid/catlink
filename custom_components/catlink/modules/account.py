@@ -31,6 +31,9 @@ from ..const import (
     SIGN_KEY,
 )
 from ..helpers import Helper
+from .aliyun_channel import AliyunChannel
+
+API_ALIYUN_AUTH_CODE = "token/user/auth/aliLive/authCode"
 
 
 class Account:
@@ -41,6 +44,7 @@ class Account:
         self._config = config
         self.hass = hass
         self.http = aiohttp_client.async_create_clientsession(hass, auto_cleanup=False)
+        self._aliyun: AliyunChannel | None = None
 
     def get_config(self, key, default=None) -> str:
         """Return the config of the account."""
@@ -248,6 +252,35 @@ class Account:
             if await self.async_login():
                 rsp = await self.request(api, params)
         return rsp.get("data") or {}
+
+    async def async_aliyun_channel(self) -> AliyunChannel:
+        """Return the Aliyun Channel, opening it lazily on first request."""
+        if self._aliyun is None:
+            self._aliyun = AliyunChannel(
+                self.hass,
+                self.http,
+                self._aliyun_country(),
+                self._async_aliyun_auth_code,
+            )
+        return self._aliyun
+
+    async def _async_aliyun_auth_code(self) -> str:
+        """Fetch a fresh Aliyun authorisation code from the CatLink Cloud."""
+        rsp = await self.request(API_ALIYUN_AUTH_CODE, {}, "POST")
+        code = rsp.get("data")
+        if not code:
+            _LOGGER.error("Aliyun auth code request failed for %s: %s", self.phone, rsp)
+            return ""
+        return code
+
+    def _aliyun_country(self) -> str:
+        """Derive the two-letter Aliyun country from the CatLink Cloud host."""
+        base = self.get_config(CONF_API_BASE) or DEFAULT_API_BASE
+        if "sgp" in base:
+            return "SG"
+        if "usa" in base:
+            return "US"
+        return "CN"
 
     @staticmethod
     def params_sign(pms: dict) -> str:

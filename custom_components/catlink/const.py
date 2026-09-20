@@ -68,6 +68,14 @@ RSA_PRIVATE_KEY = (
     "I0eGQrD/W4rBeoCX8sJDCH49lMsec52TFI2Gn8tTKOCqqgGvRSKDJ005HlnmKw=="
 )
 
+# Aliyun Channel bootstrap host and the international ("google") app credentials.
+# The owner must transcribe both from com/catlinks/app/common/AppApplication.java:214-215
+# (international branch, CatLink Android 4.3.5) into these placeholders before any
+# live use, and must separately approve pushing that commit to the public fork.
+ALIYUN_APP_KEY = ""
+ALIYUN_APP_SECRET = ""
+ALIYUN_DOMAIN = "api.link.aliyun.com"
+
 SUPPORTED_DOMAINS = [
     "sensor",
     "binary_sensor",
