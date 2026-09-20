@@ -27,8 +27,16 @@ CONF_UPDATE_INTERVAL = "update_interval"
 
 DEFAULT_API_BASE = "https://app.catlinks.cn/api/"
 
-# Device types with full support (sensors, switches, selects, etc.)
-SUPPORTED_DEVICE_TYPES = frozenset({"C08", "SCOOPER", "LITTER_BOX_599", "FEEDER", "PUREPRO"})
+# Device types pre-selected by default in the config flow (they have real controls).
+SUPPORTED_DEVICE_TYPES = frozenset(
+    {"C08", "SCOOPER", "LITTER_BOX_599", "FEEDER", "PUREPRO", "VISUAL_PRO_ULTRA"}
+)
+
+# Per-device-type override for the config flow support label, for device types
+# that are neither fully "Supported" nor "Limited support".
+DEVICE_SUPPORT_LABELS: dict[str, str] = {
+    "VISUAL_PRO_ULTRA": "Settings supported; live status and cleaning pending",
+}
 
 # API server regions: value is the API base URL
 API_SERVERS: dict[str, str] = {
@@ -67,6 +75,7 @@ SUPPORTED_DOMAINS = [
     "select",
     "button",
     "number",
+    "time",
 ]
 
 ACCOUNT_SCHEMA = vol.Schema(

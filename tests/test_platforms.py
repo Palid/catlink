@@ -2,7 +2,14 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from custom_components.catlink import binary_sensor, button, select, sensor, switch
+from custom_components.catlink import (
+    binary_sensor,
+    button,
+    select,
+    sensor,
+    switch,
+    time,
+)
 from custom_components.catlink.const import (
     CONF_ACCOUNTS,
     CONF_DEVICE_IDS,
@@ -200,6 +207,7 @@ async def test_all_platforms_have_setup_entry(
         ("binary_sensor", binary_sensor),
         ("select", select),
         ("button", button),
+        ("time", time),
     ]:
         assert hasattr(module, "async_setup_entry")
         assert callable(module.async_setup_entry)

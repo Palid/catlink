@@ -32,3 +32,71 @@ request_api:
       example: true
       selector:
         boolean:
+
+add_timing:
+  description: Add a timed cleaning to a Scooper Pro Ultra
+  target:
+    entity:
+      integration: catlink
+      domain: sensor
+  fields:
+    time:
+      description: Time of day in HH:mm
+      example: "09:30"
+      required: true
+      selector:
+        text:
+
+update_timing:
+  description: Change a timed cleaning on a Scooper Pro Ultra
+  target:
+    entity:
+      integration: catlink
+      domain: sensor
+  fields:
+    timing_id:
+      description: Id of the schedule to change
+      example: "12345"
+      required: true
+      selector:
+        text:
+    time:
+      description: New time of day in HH:mm
+      example: "10:15"
+      required: true
+      selector:
+        text:
+
+remove_timing:
+  description: Remove a timed cleaning from a Scooper Pro Ultra
+  target:
+    entity:
+      integration: catlink
+      domain: sensor
+  fields:
+    timing_id:
+      description: Id of the schedule to remove
+      example: "12345"
+      required: true
+      selector:
+        text:
+
+toggle_timing:
+  description: Enable or disable a timed cleaning on a Scooper Pro Ultra
+  target:
+    entity:
+      integration: catlink
+      domain: sensor
+  fields:
+    timing_id:
+      description: Id of the schedule to toggle
+      example: "12345"
+      required: true
+      selector:
+        text:
+    enabled:
+      description: Whether the schedule should be enabled
+      example: true
+      required: true
+      selector:
+        boolean:

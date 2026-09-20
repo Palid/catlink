@@ -30,6 +30,7 @@ from .const import (
     CONF_PHONE,
     CONF_PHONE_IAC,
     CONF_UPDATE_INTERVAL,
+    DEVICE_SUPPORT_LABELS,
     DOMAIN,
     ERROR_INVALID_AUTH,
     SUPPORTED_DEVICE_TYPES,
@@ -43,7 +44,9 @@ def _device_label(dat: dict, supported: bool) -> str:
     name = dat.get("deviceName") or dat.get("model") or "Unknown"
     model = dat.get("model", "")
     device_type = dat.get("deviceType", "")
-    suffix = "Supported" if supported else "Limited support"
+    suffix = DEVICE_SUPPORT_LABELS.get(device_type) or (
+        "Supported" if supported else "Limited support"
+    )
     if model and model != name:
         return f"{name} ({model}) - {suffix}"
     return f"{name} ({device_type}) - {suffix}"
