@@ -13,7 +13,13 @@ from custom_components.catlink.devices.scooper import ScooperDevice
 from custom_components.catlink.devices.scooper_pro_ultra import ScooperProUltraDevice
 from custom_components.catlink.devices.purepro import PureProDevice
 from custom_components.catlink.models.additional_cfg import AdditionalDeviceConfig
+from custom_components.catlink.modules.aliyun_channel import (
+    AliyunAuthFailed,
+    AliyunRequestFailed,
+)
 import pytest
+
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 
 
 @pytest.fixture
@@ -145,6 +151,36 @@ def pro_ultra_about_body():
         "mac": "44:72:AC:0D:89:37",
         "model": "Standard",
         "sn": None,
+    }
+
+
+@pytest.fixture
+def pro_ultra_thing_properties():
+    """Recorded Aliyun Thing Property snapshot, flattened as the channel returns it.
+
+    Values are placeholders for the wire shapes documented in the design brief;
+    the concrete snapshot becomes a fixture once the owner runs a live read.
+    """
+    return {
+        "RunStatus": "runStatus=0&biz=0",
+        "AbnormalState": "0",
+        "GarbageBoxStatus": "garbageBox=1&fullLevel=0",
+        "CatLitterBalance": "62",
+        "DeviceWeihgt": "4.8",
+        "WiFiRSSI": "-51",
+        "FirmwareVersion": "1.4.2",
+        "ChildLock": "1",
+        "ContinuousClean": "0",
+        "PromptSoundSwitch": "1",
+        "SoftStoolMode": "0",
+        "SleepMode": "0",
+        "CurrentModel": "0",
+        "IndicatorLight": "2",
+        "DayNightMode": "1",
+        "CatLitterType": "1",
+        "DelayTimeOfClean": "3",
+        "LimitWhenFull": "10",
+        "CatLitterFlatTime": "13",
     }
 
 
@@ -1029,28 +1065,74 @@ class TestScooperProUltraDevice:
         assert "firmware_version" not in attrs
         assert "wifi_signal" not in attrs
 
-    def test_hass_select_is_empty(
+    def test_hass_select_exposes_work_mode_and_aliyun_selects(
         self, mock_coordinator, sample_pro_ultra_data
     ) -> None:
-        """Test the inherited work-mode select is not exposed (deferred to #8)."""
+        """Test the work-mode select deferred from #7 is now wired, with the Aliyun selects."""
         device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
-        assert device.hass_select == {}
+        selects = device.hass_select
+        assert set(selects) == {
+            "work_mode",
+            "indicator_light",
+            "fill_light",
+            "litter_type",
+        }
+        assert selects["work_mode"]["options"] == ["induction", "manual", "timing"]
 
     def test_hass_switch_structure(
         self, mock_coordinator, sample_pro_ultra_data
     ) -> None:
-        """Test hass_switch exposes quiet mode, all timings and cat-weight auto-update."""
+        """Test hass_switch keeps the CatLink Cloud switches and adds the Aliyun ones."""
         device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
         switches = device.hass_switch
-        assert set(switches) == {"quiet_mode", "all_timings", "auto_update_pet_weight"}
-        assert "urine_identification" not in switches
+        assert set(switches) == {
+            "quiet_mode",
+            "all_timings",
+            "auto_update_pet_weight",
+            "child_lock",
+            "continuous_clean",
+            "prompt_sounds",
+            "soft_stool",
+            "camera_sleep",
+        }
+
+    def test_hass_number_structure(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test hass_number exposes the Aliyun-backed numbers."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        assert set(device.hass_number) == {
+            "clean_delay",
+            "full_bin_threshold",
+            "levelling_duration",
+        }
+
+    def test_hass_binary_sensor_structure(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test hass_binary_sensor exposes the problem and bin sensors."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        assert set(device.hass_binary_sensor) == {
+            "problem",
+            "bin_full",
+            "bin_installed",
+        }
 
     def test_hass_button_and_time_structure(
         self, mock_coordinator, sample_pro_ultra_data
     ) -> None:
-        """Test hass_button exposes the resets and hass_time the quiet window."""
+        """Test hass_button adds the cleaning actions and hass_time keeps the quiet window."""
         device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
-        assert set(device.hass_button) == {"reset_litter", "reset_deodorant"}
+        assert set(device.hass_button) == {
+            "reset_litter",
+            "reset_deodorant",
+            "clean",
+            "empty",
+            "level",
+            "pause",
+            "resume",
+            "cancel",
+        }
         assert set(device.hass_time) == {"quiet_start", "quiet_end"}
 
     @pytest.mark.usefixtures("enable_custom_integrations")
@@ -1319,6 +1401,426 @@ class TestScooperProUltraDevice:
 
         assert device.schedules == 1
         assert device._timings[0]["setting"] == "09:30"  # noqa: SLF001
+
+
+def _fake_channel(properties: dict | None = None):
+    """Return a mock Aliyun channel that records writes and echoes properties."""
+    channel = MagicMock()
+    channel.async_set_properties = AsyncMock()
+    channel.async_get_properties = AsyncMock(return_value=dict(properties or {}))
+    return channel
+
+
+def _pro_ultra_ready(
+    data, coordinator, properties, iot_id="IOTID26CHAR26CHAR26CHAR26"
+):
+    """Build a Pro Ultra device with an iotId and a property snapshot in place."""
+    device = ScooperProUltraDevice(data, coordinator)
+    device.detail = {"iotId": iot_id}
+    device.thing_properties = dict(properties)
+    channel = _fake_channel(properties)
+    coordinator.account.async_aliyun_channel = AsyncMock(return_value=channel)
+    return device, channel
+
+
+class TestScooperProUltraAliyun:
+    """Tests for the Scooper Pro Ultra entities backed by the Aliyun Channel."""
+
+    def test_entity_state_from_snapshot(
+        self, mock_coordinator, sample_pro_ultra_data, pro_ultra_thing_properties
+    ) -> None:
+        """Test every read-only entity derives from one recorded property snapshot."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        device.thing_properties = pro_ultra_thing_properties
+
+        assert device.status == "idle"
+        assert device.problem is False
+        assert device.bin_full is False
+        assert device.bin_installed is True
+        assert device.litter_balance == 62
+        assert device.weight == "4.8"
+        assert device.wifi_signal == "-51"
+        assert device.firmware == "1.4.2"
+        assert device.child_lock is True
+        assert device.continuous_clean is False
+        assert device.prompt_sounds is True
+        assert device.soft_stool is False
+        assert device.camera_sleep is True
+        assert device.work_mode == "induction"
+        assert device.indicator_light == "auto"
+        assert device.fill_light == "on"
+        assert device.litter_type == "mixed"
+        assert device.clean_delay == 3
+        assert device.full_bin_threshold == 3
+        assert device.levelling_duration == 3
+
+    def test_problem_and_bin_from_snapshot(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test the problem reason and bin sensors derive from their properties."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        device.thing_properties = {
+            "AbnormalState": "6",
+            "GarbageBoxStatus": "garbageBox=0&fullLevel=2",
+        }
+        assert device.problem is True
+        assert device.problem_attrs()["reason"] == "motor_blocking_protection"
+        assert device.bin_full is True
+        assert device.bin_installed is False
+
+    @pytest.mark.parametrize(
+        ("run_status", "expected"),
+        [
+            ("runStatus=0&biz=0", "idle"),
+            ("runStatus=1&biz=1", "cleaning"),
+            ("runStatus=1&biz=2", "emptying"),
+            ("runStatus=1&biz=3", "levelling"),
+            ("runStatus=2&biz=1", "cancelling"),
+            ("runStatus=3&biz=1", "paused"),
+            ("runStatus=4&biz=1", "paused"),
+        ],
+    )
+    def test_status_mapping(
+        self, mock_coordinator, sample_pro_ultra_data, run_status, expected
+    ) -> None:
+        """Test the status sensor maps runStatus and biz, treating 4 as paused."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        device.thing_properties = {"RunStatus": run_status}
+        assert device.status == expected
+
+    async def test_clean_writes_run_status(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test Clean writes runStatus=1&biz=1 when the device is idle and well."""
+        device, channel = _pro_ultra_ready(
+            sample_pro_ultra_data,
+            mock_coordinator,
+            {
+                "RunStatus": "runStatus=0&biz=0",
+                "AbnormalState": "0",
+                "GarbageBoxStatus": "g=1&f=0",
+            },
+        )
+
+        assert await device.async_clean() is True
+
+        channel.async_set_properties.assert_awaited_once_with(
+            "IOTID26CHAR26CHAR26CHAR26", {"RunStatus": "runStatus=1&biz=1"}
+        )
+
+    async def test_empty_and_level_write_their_biz(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test Empty writes biz=2 and Level writes biz=3."""
+        snapshot = {
+            "RunStatus": "runStatus=0&biz=0",
+            "AbnormalState": "0",
+            "GarbageBoxStatus": "g=1&f=0",
+        }
+        device, channel = _pro_ultra_ready(
+            sample_pro_ultra_data, mock_coordinator, snapshot
+        )
+
+        await device.async_empty()
+        assert channel.async_set_properties.await_args[0][1] == {
+            "RunStatus": "runStatus=1&biz=2"
+        }
+
+        await device.async_level()
+        assert channel.async_set_properties.await_args[0][1] == {
+            "RunStatus": "runStatus=1&biz=3"
+        }
+
+    async def test_pause_resume_cancel_reuse_current_biz(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test pause/resume/cancel reuse the parsed current biz, never a guess."""
+        device, channel = _pro_ultra_ready(
+            sample_pro_ultra_data, mock_coordinator, {"RunStatus": "runStatus=1&biz=2"}
+        )
+        await device.async_pause()
+        assert channel.async_set_properties.await_args[0][1] == {
+            "RunStatus": "runStatus=3&biz=2"
+        }
+
+        device.thing_properties = {"RunStatus": "runStatus=3&biz=2"}
+        await device.async_resume()
+        assert channel.async_set_properties.await_args[0][1] == {
+            "RunStatus": "runStatus=1&biz=2"
+        }
+
+        device.thing_properties = {"RunStatus": "runStatus=1&biz=3"}
+        await device.async_cancel()
+        assert channel.async_set_properties.await_args[0][1] == {
+            "RunStatus": "runStatus=2&biz=3"
+        }
+
+    async def test_clean_blocked_when_running(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test Clean is refused, with no write, while a cycle runs."""
+        device, channel = _pro_ultra_ready(
+            sample_pro_ultra_data,
+            mock_coordinator,
+            {
+                "RunStatus": "runStatus=1&biz=1",
+                "AbnormalState": "0",
+                "GarbageBoxStatus": "g=1&f=0",
+            },
+        )
+
+        with pytest.raises(HomeAssistantError):
+            await device.async_clean()
+        channel.async_set_properties.assert_not_awaited()
+
+    async def test_clean_blocked_when_abnormal(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test Clean is refused when AbnormalState is a known fault."""
+        device, channel = _pro_ultra_ready(
+            sample_pro_ultra_data,
+            mock_coordinator,
+            {
+                "RunStatus": "runStatus=0&biz=0",
+                "AbnormalState": "1",
+                "GarbageBoxStatus": "g=1&f=0",
+            },
+        )
+
+        with pytest.raises(HomeAssistantError):
+            await device.async_clean()
+        channel.async_set_properties.assert_not_awaited()
+
+    async def test_clean_blocked_when_bin_full(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test Clean is refused when the waste bin is full."""
+        device, channel = _pro_ultra_ready(
+            sample_pro_ultra_data,
+            mock_coordinator,
+            {
+                "RunStatus": "runStatus=0&biz=0",
+                "AbnormalState": "0",
+                "GarbageBoxStatus": "g=1&f=2",
+            },
+        )
+
+        with pytest.raises(HomeAssistantError):
+            await device.async_clean()
+        channel.async_set_properties.assert_not_awaited()
+
+    async def test_clean_blocked_without_snapshot(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test Clean is refused when no property snapshot has been read."""
+        device, channel = _pro_ultra_ready(
+            sample_pro_ultra_data, mock_coordinator, {}
+        )
+
+        with pytest.raises(HomeAssistantError):
+            await device.async_clean()
+        channel.async_set_properties.assert_not_awaited()
+
+    async def test_setting_blocked_when_running(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test a setting write is refused while the device is not idle."""
+        device, channel = _pro_ultra_ready(
+            sample_pro_ultra_data, mock_coordinator, {"RunStatus": "runStatus=1&biz=1"}
+        )
+
+        with pytest.raises(HomeAssistantError):
+            await device.async_set_child_lock(True)
+        channel.async_set_properties.assert_not_awaited()
+
+    async def test_child_lock_write_when_idle(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test a switch write goes through when idle."""
+        device, channel = _pro_ultra_ready(
+            sample_pro_ultra_data, mock_coordinator, {"RunStatus": "runStatus=0&biz=0"}
+        )
+
+        await device.async_set_child_lock(True)
+        channel.async_set_properties.assert_awaited_once_with(
+            "IOTID26CHAR26CHAR26CHAR26", {"ChildLock": 1}
+        )
+
+    async def test_camera_sleep_write_is_inverted(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test turning camera sleep on writes SleepMode 0 (awake maps to on)."""
+        device, channel = _pro_ultra_ready(
+            sample_pro_ultra_data, mock_coordinator, {"RunStatus": "runStatus=0&biz=0"}
+        )
+
+        await device.async_set_camera_sleep(True)
+        assert channel.async_set_properties.await_args[0][1] == {"SleepMode": 0}
+
+    async def test_number_writes_map_level_to_stored(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test the full-bin threshold and levelling numbers map a level to stored steps."""
+        device, channel = _pro_ultra_ready(
+            sample_pro_ultra_data, mock_coordinator, {"RunStatus": "runStatus=0&biz=0"}
+        )
+
+        await device.async_set_full_bin_threshold(4)
+        assert channel.async_set_properties.await_args[0][1] == {"LimitWhenFull": 15}
+
+        await device.async_set_levelling_duration(2)
+        assert channel.async_set_properties.await_args[0][1] == {"CatLitterFlatTime": 11}
+
+    async def test_indicator_light_select_writes_code(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test the indicator-light select writes the three-state code when idle."""
+        device, channel = _pro_ultra_ready(
+            sample_pro_ultra_data, mock_coordinator, {"RunStatus": "runStatus=0&biz=0"}
+        )
+
+        await device.async_select_indicator_light("auto")
+        assert channel.async_set_properties.await_args[0][1] == {"IndicatorLight": 2}
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_work_mode_write_uses_catlink_cloud_when_idle(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test the work-mode select writes over the CatLink Cloud once idle."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        device.thing_properties = {"RunStatus": "runStatus=0&biz=0"}
+        mock_coordinator.account.request = AsyncMock(return_value={"returnCode": 0})
+        device.update_device_detail = AsyncMock(return_value={})
+
+        await device.async_select_work_mode("manual")
+
+        call_args = mock_coordinator.account.request.call_args
+        assert call_args[0][0] == "token/device/changeMode"
+        assert call_args[0][1] == {"workModel": "01", "deviceId": "ultra1"}
+
+    async def test_work_mode_blocked_when_running(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test the work-mode select is refused while the device runs."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        device.thing_properties = {"RunStatus": "runStatus=1&biz=1"}
+        mock_coordinator.account.request = AsyncMock(return_value={"returnCode": 0})
+
+        with pytest.raises(HomeAssistantError):
+            await device.async_select_work_mode("manual")
+        mock_coordinator.account.request.assert_not_called()
+
+    async def test_write_auth_failure_starts_reauth(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test an Aliyun auth failure on a write surfaces ConfigEntryAuthFailed."""
+        device, channel = _pro_ultra_ready(
+            sample_pro_ultra_data,
+            mock_coordinator,
+            {
+                "RunStatus": "runStatus=0&biz=0",
+                "AbnormalState": "0",
+                "GarbageBoxStatus": "g=1&f=0",
+            },
+        )
+        channel.async_set_properties = AsyncMock(side_effect=AliyunAuthFailed("expired"))
+
+        with pytest.raises(ConfigEntryAuthFailed):
+            await device.async_clean()
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_update_detail_reads_thing_properties(
+        self, mock_coordinator, sample_pro_ultra_data, pro_ultra_thing_properties
+    ) -> None:
+        """Test update_device_detail reads the Aliyun properties when an iotId is present."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        mock_coordinator.account.request = AsyncMock(
+            return_value={"data": {"deviceInfo": {"iotId": "IOTID26CHAR26CHAR26CHAR26"}}}
+        )
+        channel = _fake_channel(pro_ultra_thing_properties)
+        mock_coordinator.account.async_aliyun_channel = AsyncMock(return_value=channel)
+
+        await device.update_device_detail()
+
+        channel.async_get_properties.assert_awaited_once_with(
+            "IOTID26CHAR26CHAR26CHAR26"
+        )
+        assert device.status == "idle"
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_update_detail_survives_unreachable_aliyun(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test an unreachable Aliyun leaves the CatLink Cloud detail intact and does not raise."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        mock_coordinator.account.request = AsyncMock(
+            return_value={
+                "data": {
+                    "deviceInfo": {
+                        "iotId": "IOTID26CHAR26CHAR26CHAR26",
+                        "litterCountdown": 14,
+                    }
+                }
+            }
+        )
+        channel = MagicMock()
+        channel.async_get_properties = AsyncMock(
+            side_effect=AliyunRequestFailed("unreachable")
+        )
+        mock_coordinator.account.async_aliyun_channel = AsyncMock(return_value=channel)
+
+        result = await device.update_device_detail()
+
+        assert result["litterCountdown"] == 14
+        assert device.thing_properties == {}
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_update_detail_auth_failure_raises(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test an Aliyun auth failure during the read propagates as ConfigEntryAuthFailed."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        mock_coordinator.account.request = AsyncMock(
+            return_value={"data": {"deviceInfo": {"iotId": "IOTID26CHAR26CHAR26CHAR26"}}}
+        )
+        channel = MagicMock()
+        channel.async_get_properties = AsyncMock(
+            side_effect=AliyunAuthFailed("expired")
+        )
+        mock_coordinator.account.async_aliyun_channel = AsyncMock(return_value=channel)
+
+        with pytest.raises(ConfigEntryAuthFailed):
+            await device.update_device_detail()
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_pro_ultra_without_iot_id_makes_no_aliyun_call(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test a Pro Ultra whose briefInfo carries no iotId opens no Aliyun Channel."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        mock_coordinator.account.request = AsyncMock(
+            return_value={"data": {"deviceInfo": {"litterCountdown": 14}}}
+        )
+        mock_coordinator.account.async_aliyun_channel = AsyncMock()
+
+        await device.update_device_detail()
+
+        mock_coordinator.account.async_aliyun_channel.assert_not_called()
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_non_pro_ultra_device_makes_no_aliyun_call(
+        self, mock_coordinator, sample_feeder_data
+    ) -> None:
+        """Test a device that is not a Pro Ultra never opens the Aliyun Channel."""
+        device = FeederDevice(sample_feeder_data, mock_coordinator)
+        mock_coordinator.account.async_aliyun_channel = AsyncMock()
+        mock_coordinator.account.request = AsyncMock(
+            return_value={"data": {"deviceInfo": {"foodOutStatus": "00"}}}
+        )
+
+        await device.update_device_detail()
+
+        mock_coordinator.account.async_aliyun_channel.assert_not_called()
 
 
 class TestScooperDevice:

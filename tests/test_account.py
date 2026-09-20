@@ -492,3 +492,57 @@ class TestAccountRequestErrors:
         result = await account.request("token/device/list")
 
         assert result == {}
+
+
+class TestAccountAliyunChannel:
+    """Tests for the lazily-opened Aliyun Channel wiring on Account."""
+
+    @pytest.mark.parametrize(
+        ("api_base", "expected"),
+        [
+            ("https://app-sgp.catlinks.cn/api/", "SG"),
+            ("https://app-usa.catlinks.cn/api/", "US"),
+            ("https://app.catlinks.cn/api/", "CN"),
+        ],
+    )
+    def test_aliyun_country_from_api_base(
+        self, hass, mock_http_session, api_base, expected
+    ) -> None:
+        """Test the country is derived from the CatLink Cloud host, as the app does."""
+        account = Account(
+            hass,
+            {CONF_PHONE_IAC: "86", CONF_PHONE: "13812345678", CONF_API_BASE: api_base},
+        )
+        assert account._aliyun_country() == expected  # noqa: SLF001
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_aliyun_channel_is_created_once(self, account) -> None:
+        """Test the channel is built lazily and the same instance is returned after."""
+        from custom_components.catlink.modules.aliyun_channel import AliyunChannel
+
+        first = await account.async_aliyun_channel()
+        second = await account.async_aliyun_channel()
+
+        assert isinstance(first, AliyunChannel)
+        assert first is second
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_auth_code_request_returns_data_string(self, account) -> None:
+        """Test the auth-code request posts the aliLive endpoint and returns data."""
+        account.request = AsyncMock(return_value={"data": "AUTHCODE1"})
+
+        code = await account._async_aliyun_auth_code()  # noqa: SLF001
+
+        assert code == "AUTHCODE1"
+        call_args = account.request.call_args
+        assert call_args[0][0] == "token/user/auth/aliLive/authCode"
+        assert call_args[0][2] == "POST"
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_auth_code_request_returns_empty_on_failure(self, account) -> None:
+        """Test the auth-code request returns an empty string when the cloud has none."""
+        account.request = AsyncMock(return_value={"returnCode": 1002})
+
+        code = await account._async_aliyun_auth_code()  # noqa: SLF001
+
+        assert code == ""
