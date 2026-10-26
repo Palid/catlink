@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 from custom_components.catlink import async_setup
 from custom_components.catlink.const import (
     CONF_ACCOUNTS,
+    CONF_ACCOUNT_ID,
     CONF_PHONE,
     CONF_PHONE_IAC,
     DOMAIN,
@@ -40,6 +41,7 @@ def mock_account():
     with patch("custom_components.catlink.Account") as mock:
         instance = mock.return_value
         instance.uid = "86-13812345678"
+        instance.account_id = ""
         instance.async_check_auth = AsyncMock()
         yield mock
 
@@ -125,7 +127,149 @@ async def test_async_unload_entry(
     assert result is True
     assert mock_config_entry.state is ConfigEntryState.NOT_LOADED
     assert "86-13812345678" not in hass.data[DOMAIN][CONF_ACCOUNTS]
+    assert (
+        f"{DOMAIN}-86-13812345678-{CONF_DEVICES}"
+        not in hass.data[DOMAIN]["coordinators"]
+    )
     assert mock_config_entry.entry_id not in hass.data[DOMAIN]["entry_coordinators"]
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_async_setup_entry_adopts_account_id_learned_during_refresh(
+    hass: HomeAssistant,
+    mock_account,
+    mock_coordinator,
+) -> None:
+    """Test a legacy entry adopts the Account id its refresh re-login teaches it.
+
+    A stored token means async_check_auth does not sign in, so the Account id is
+    only known once the refresh's re-login fetches it; adoption must run after
+    the refresh.
+    """
+    mock_account.return_value.account_id = ""
+    mock_account.return_value.uid = "86-13812345678"
+
+    async def _learn_account_id() -> None:
+        mock_account.return_value.account_id = "acc-1"
+        mock_account.return_value.uid = "acc-1"
+
+    mock_coordinator.return_value.async_refresh = AsyncMock(
+        side_effect=_learn_account_id
+    )
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_PHONE_IAC: "86",
+            CONF_PHONE: "13812345678",
+            "api_base": "https://app.catlinks.cn/api/",
+            "password": "testpass",
+        },
+        options={},
+        unique_id="86-13812345678",
+    )
+
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN].setdefault(CONF_ACCOUNTS, {})
+    hass.data[DOMAIN].setdefault(CONF_DEVICES, {})
+    hass.data[DOMAIN].setdefault("coordinators", {})
+    hass.data[DOMAIN].setdefault("add_entities", {})
+    hass.data[DOMAIN].setdefault("config", {})
+    hass.data[DOMAIN].setdefault("entry_coordinators", {})
+
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.unique_id == "acc-1"
+    assert entry.data[CONF_ACCOUNT_ID] == "acc-1"
+    assert entry.data[CONF_PHONE] == "13812345678"
+    assert "acc-1" in hass.data[DOMAIN][CONF_ACCOUNTS]
+    assert f"{DOMAIN}-acc-1-{CONF_DEVICES}" in hass.data[DOMAIN]["coordinators"]
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_async_setup_entry_keeps_unique_id_when_account_id_is_taken(
+    hass: HomeAssistant,
+    mock_account,
+    mock_coordinator,
+) -> None:
+    """Test adoption is skipped when another entry already holds the Account id."""
+    mock_account.return_value.account_id = "acc-1"
+    mock_account.return_value.uid = "acc-1"
+    other = MockConfigEntry(domain=DOMAIN, data={}, unique_id="acc-1")
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_PHONE_IAC: "86",
+            CONF_PHONE: "13812345678",
+            "api_base": "https://app.catlinks.cn/api/",
+            "password": "testpass",
+        },
+        options={},
+        unique_id="86-13812345678",
+    )
+
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN].setdefault(CONF_ACCOUNTS, {})
+    hass.data[DOMAIN].setdefault(CONF_DEVICES, {})
+    hass.data[DOMAIN].setdefault("coordinators", {})
+    hass.data[DOMAIN].setdefault("add_entities", {})
+    hass.data[DOMAIN].setdefault("config", {})
+    hass.data[DOMAIN].setdefault("entry_coordinators", {})
+
+    other.add_to_hass(hass)
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert result is True
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.unique_id == "86-13812345678"
+    assert CONF_ACCOUNT_ID not in entry.data
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_async_unload_entry_uses_the_account_id_key(
+    hass: HomeAssistant,
+    mock_account,
+    mock_coordinator,
+) -> None:
+    """Test unloading removes the account registered under the Account id."""
+    mock_account.return_value.account_id = "acc-1"
+    mock_account.return_value.uid = "acc-1"
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_PHONE_IAC: "86",
+            CONF_PHONE: "13812345678",
+            "api_base": "https://app.catlinks.cn/api/",
+            "password": "testpass",
+        },
+        options={},
+        unique_id="86-13812345678",
+    )
+
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN].setdefault(CONF_ACCOUNTS, {})
+    hass.data[DOMAIN].setdefault(CONF_DEVICES, {})
+    hass.data[DOMAIN].setdefault("coordinators", {})
+    hass.data[DOMAIN].setdefault("add_entities", {})
+    hass.data[DOMAIN].setdefault("config", {})
+    hass.data[DOMAIN].setdefault("entry_coordinators", {})
+
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert "acc-1" in hass.data[DOMAIN][CONF_ACCOUNTS]
+    assert f"{DOMAIN}-acc-1-{CONF_DEVICES}" in hass.data[DOMAIN]["coordinators"]
+
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert "acc-1" not in hass.data[DOMAIN][CONF_ACCOUNTS]
+    assert f"{DOMAIN}-acc-1-{CONF_DEVICES}" not in hass.data[DOMAIN]["coordinators"]
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
