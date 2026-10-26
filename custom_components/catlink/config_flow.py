@@ -24,9 +24,10 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
-    API_SERVERS,
     CONF_ACCOUNT_ID,
     CONF_API_BASE,
+    CONF_CLIENT_SERVER,
+    CONF_COUNTRY_CODE,
     CONF_DEVICE_IDS,
     CONF_EMAIL,
     CONF_PHONE,
@@ -108,19 +109,27 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
             email = user_input[CONF_EMAIL].strip()
             password = user_input[CONF_PASSWORD]
 
-            region, account_id = await discover_region(
-                self.hass, password=password, email=email
+            stored_base = None
+            if self.source == SOURCE_REAUTH:
+                stored_base = self._get_reauth_entry().data.get(CONF_API_BASE)
+
+            discovery = await discover_region(
+                self.hass, password=password, email=email, api_base=stored_base
             )
-            if region is None:
+            if discovery.api_base is None:
                 errors["base"] = ERROR_INVALID_AUTH
             else:
                 config = {
-                    CONF_API_BASE: API_SERVERS[region],
+                    CONF_API_BASE: discovery.api_base,
                     CONF_EMAIL: email,
                     CONF_PASSWORD: password,
                 }
-                if account_id:
-                    config[CONF_ACCOUNT_ID] = account_id
+                if discovery.account_id:
+                    config[CONF_ACCOUNT_ID] = discovery.account_id
+                if discovery.client_server is not None:
+                    config[CONF_CLIENT_SERVER] = discovery.client_server
+                if discovery.country_code is not None:
+                    config[CONF_COUNTRY_CODE] = discovery.country_code
                 return await self._async_signed_in(config, email)
 
         reauth_entry = (
@@ -152,20 +161,27 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
             password = user_input[CONF_PASSWORD]
 
             phone_iac, phone_number = parse_phone_number(phone_raw)
-            region, account_id = await discover_region(
-                self.hass, phone_iac, phone_number, password
+            stored_base = None
+            if self.source == SOURCE_REAUTH:
+                stored_base = self._get_reauth_entry().data.get(CONF_API_BASE)
+            discovery = await discover_region(
+                self.hass, phone_iac, phone_number, password, api_base=stored_base
             )
-            if region is None:
+            if discovery.api_base is None:
                 errors["base"] = ERROR_INVALID_AUTH
             else:
                 config = {
-                    CONF_API_BASE: API_SERVERS[region],
+                    CONF_API_BASE: discovery.api_base,
                     CONF_PHONE: phone_number,
                     CONF_PHONE_IAC: phone_iac,
                     CONF_PASSWORD: password,
                 }
-                if account_id:
-                    config[CONF_ACCOUNT_ID] = account_id
+                if discovery.account_id:
+                    config[CONF_ACCOUNT_ID] = discovery.account_id
+                if discovery.client_server is not None:
+                    config[CONF_CLIENT_SERVER] = discovery.client_server
+                if discovery.country_code is not None:
+                    config[CONF_COUNTRY_CODE] = discovery.country_code
                 return await self._async_signed_in(
                     config, f"+{phone_iac}{phone_number}"
                 )
