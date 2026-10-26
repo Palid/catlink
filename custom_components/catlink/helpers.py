@@ -1,5 +1,6 @@
 """Helper functions for the CatLink integration."""
 
+from collections.abc import Mapping
 from datetime import timedelta
 import re
 from typing import TYPE_CHECKING, Any
@@ -12,7 +13,9 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     API_SERVERS,
+    CONF_ACCOUNT_ID,
     CONF_API_BASE,
+    CONF_EMAIL,
     CONF_PASSWORD,
     CONF_PHONE,
     CONF_PHONE_IAC,
@@ -43,6 +46,20 @@ async def async_setup_domain_platform(
         await extra_setup()
 
 
+def account_uid(config: Mapping[str, Any]) -> str:
+    """Build the key an account's stored token and registry entry live under.
+
+    The account id once it is known, otherwise the legacy phone-based key.
+    """
+    account_id = config.get(CONF_ACCOUNT_ID)
+    if account_id:
+        return account_id
+    phone = config.get(CONF_PHONE)
+    if phone:
+        return f"{config.get(CONF_PHONE_IAC)}-{phone}"
+    return ""
+
+
 def parse_phone_number(phone: str) -> tuple[str, str]:
     """Parse a full phone number into country code and national number.
 
@@ -69,25 +86,38 @@ def parse_phone_number(phone: str) -> tuple[str, str]:
 
 
 async def discover_region(
-    hass: HomeAssistant, phone_iac: str, phone_number: str, password: str
-) -> str | None:
-    """Try each API region until login succeeds. Returns region key or None."""
+    hass: HomeAssistant,
+    phone_iac: str | None = None,
+    phone_number: str | None = None,
+    password: str | None = None,
+    *,
+    email: str | None = None,
+) -> tuple[str | None, str | None]:
+    """Try each API region until sign-in succeeds.
+
+    Returns (region key, Account id) on success, or (None, None) if no region
+    signs in. The Account id is None when the profile did not carry one. The
+    successful sign-in has stored the token under the Account's key, so a caller
+    that seeds the Account id into its own config reads that token back instead
+    of signing in again.
+    """
     from .modules.account import Account
+
+    credentials = {CONF_PASSWORD: password}
+    if email:
+        credentials[CONF_EMAIL] = email
+    else:
+        credentials[CONF_PHONE] = phone_number
+        credentials[CONF_PHONE_IAC] = phone_iac
 
     for region in ("global", "china", "usa", "singapore"):
         api_base = API_SERVERS.get(region)
         if not api_base:
             continue
-        config = {
-            CONF_API_BASE: api_base,
-            CONF_PHONE: phone_number,
-            CONF_PHONE_IAC: phone_iac,
-            CONF_PASSWORD: password,
-        }
-        account = Account(hass, config)
+        account = Account(hass, {CONF_API_BASE: api_base, **credentials})
         if await account.async_login():
-            return region
-    return None
+            return region, account.account_id or None
+    return None, None
 
 
 def optional_int(

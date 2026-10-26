@@ -1,8 +1,10 @@
 {
   "config": {
     "abort": {
-      "already_configured": "This account is already configured.",
-      "reauth_successful": "Re-authentication successful."
+      "already_configured": "This CatLink Account is already configured.",
+      "identifier_switched": "The existing entry now signs in with the new Account Identifier.",
+      "reauth_successful": "Re-authentication successful.",
+      "wrong_account": "That signed in to a different CatLink Account than this entry. Re-authenticate with the Account Identifier this entry already uses."
     },
     "error": {
       "cannot_connect": "Cannot connect to CatLink servers. Please check your internet connection and try again.",
@@ -10,12 +12,35 @@
     },
     "step": {
       "user": {
-        "description": "You must use a different account than the one on the mobile app. Use the share feature in the app to create a dedicated account for Home Assistant, because only one instance can be logged in per account at a time. Enter your full phone number with country code (e.g. +447911123456).",
+        "description": "The CatLink Cloud allows one Session per Account, so signing in here ends the Session on your phone. Use the share feature in the app to give Home Assistant its own Account, and share your Devices with it.",
+        "menu_options": {
+          "email": "Email and password",
+          "phone": "Phone number and password"
+        },
+        "title": "How do you sign in to the CatLink app?"
+      },
+      "email": {
+        "description": "Enter the Email and password you sign in to the CatLink app with.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        },
+        "title": "Sign in with Email"
+      },
+      "phone": {
+        "description": "Enter your full phone number with country code (e.g. +447911123456) and the password you sign in to the CatLink app with.",
         "data": {
           "phone": "Phone number",
           "password": "Password"
         },
-        "title": "Connect to CatLink"
+        "title": "Sign in with a phone number"
+      },
+      "switch_identifier": {
+        "description": "This CatLink Account is already configured as {current_identifier}. Switch that entry to {new_identifier} instead of adding a second one? A second entry on the same Account would evict the first on every refresh. Your Devices, entities and automations are kept either way.",
+        "data": {
+          "switch_identifier": "Switch the existing entry"
+        },
+        "title": "Account already configured"
       },
       "discovery": {
         "description": "Found {total_count} device(s): {supported_count} fully supported, {unsupported_count} with limited support. Select which devices to add. Supported devices are pre-selected for quick setup.",
@@ -37,6 +62,12 @@
         },
         "title": "Manage devices"
       }
+    }
+  },
+  "issues": {
+    "repeated_eviction": {
+      "title": "CatLink keeps evicting your Session",
+      "description": "The CatLink Cloud allows one Session per Account, so each time Home Assistant reclaims the Session it ends the Session on your phone app, and each time you open the app it evicts Home Assistant. This has happened repeatedly. To stop it, create a second CatLink Account, share your Devices to it, and re-authenticate this integration with that dedicated Account."
     }
   }
 }

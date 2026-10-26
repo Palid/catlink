@@ -5,7 +5,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.catlink.const import DOMAIN
+from custom_components.catlink.const import (
+    CONF_EMAIL,
+    CONF_PHONE,
+    CONF_PHONE_IAC,
+    DOMAIN,
+)
 from custom_components.catlink.helpers import (
     Helper,
     async_setup_domain_platform,
@@ -114,23 +119,27 @@ class TestDiscoverRegion:
     """Tests for discover_region."""
 
     @pytest.mark.usefixtures("enable_custom_integrations")
-    async def test_discover_region_returns_region_on_login_success(self, hass) -> None:
-        """Test discover_region returns region when login succeeds."""
+    async def test_discover_region_returns_region_and_account_id(self, hass) -> None:
+        """Test discover_region returns the region and the Account id on success."""
         with patch(
             "custom_components.catlink.modules.account.Account"
         ) as mock_account_cls:
             mock_account = MagicMock()
             mock_account.async_login = AsyncMock(return_value=True)
+            mock_account.account_id = "acc-1"
             mock_account_cls.return_value = mock_account
 
-            result = await discover_region(hass, "86", "13812345678", "testpass")
+            region, account_id = await discover_region(
+                hass, "86", "13812345678", "testpass"
+            )
 
-            assert result == "global"
+            assert region == "global"
+            assert account_id == "acc-1"
             mock_account.async_login.assert_called_once()
 
     @pytest.mark.usefixtures("enable_custom_integrations")
     async def test_discover_region_returns_none_when_all_fail(self, hass) -> None:
-        """Test discover_region returns None when no region succeeds."""
+        """Test discover_region returns (None, None) when no region succeeds."""
         with patch(
             "custom_components.catlink.modules.account.Account"
         ) as mock_account_cls:
@@ -138,9 +147,34 @@ class TestDiscoverRegion:
             mock_account.async_login = AsyncMock(return_value=False)
             mock_account_cls.return_value = mock_account
 
-            result = await discover_region(hass, "86", "13812345678", "wrongpass")
+            region, account_id = await discover_region(
+                hass, "86", "13812345678", "wrongpass"
+            )
 
-            assert result is None
+            assert region is None
+            assert account_id is None
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_discover_region_email_branch_sends_no_phone(self, hass) -> None:
+        """Test the email branch signs in with an Email and no phone fields."""
+        with patch(
+            "custom_components.catlink.modules.account.Account"
+        ) as mock_account_cls:
+            mock_account = MagicMock()
+            mock_account.async_login = AsyncMock(return_value=True)
+            mock_account.account_id = "acc-1"
+            mock_account_cls.return_value = mock_account
+
+            region, account_id = await discover_region(
+                hass, password="testpass", email="cat@example.com"
+            )
+
+            assert region == "global"
+            assert account_id == "acc-1"
+            passed_config = mock_account_cls.call_args[0][1]
+            assert passed_config[CONF_EMAIL] == "cat@example.com"
+            assert CONF_PHONE not in passed_config
+            assert CONF_PHONE_IAC not in passed_config
 
 
 class TestAsyncSetupDomainPlatform:
