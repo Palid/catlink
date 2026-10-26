@@ -27,8 +27,7 @@ class CatlinkEntity(CoordinatorEntity):
         self._attr_device_id = f"{device.type}_{device.mac}"
         self._attr_unique_id = f"{self._attr_device_id}-{name}"
         mac = device.mac[-4:] if device.mac else device.id
-        object_id = f"{device.type}_{mac}_{name}"
-        self.entity_id = f"{DOMAIN}.{slugify(object_id)}"
+        self._object_id = slugify(f"{device.type}_{mac}_{name}")
         self._attr_icon = self._option.get("icon")
         self._attr_device_class = self._option.get("class")
         self._attr_native_unit_of_measurement = self._option.get("unit")
@@ -46,10 +45,15 @@ class CatlinkEntity(CoordinatorEntity):
             sw_version=device.detail.get("firmwareVersion"),
         )
 
+    def add_to_platform_start(self, hass, platform, parallel_updates) -> None:
+        """Start adding the entity, suggesting an id in the platform's domain."""
+        super().add_to_platform_start(hass, platform, parallel_updates)
+        self.entity_id = f"{platform.domain}.{self._object_id}"
+
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added to hass."""
         await super().async_added_to_hass()
-        self._device.listeners[self.entity_id] = self._handle_coordinator_update
+        self._device.listeners[self._attr_unique_id] = self._handle_coordinator_update
         self._handle_coordinator_update()
 
     def _handle_coordinator_update(self):
