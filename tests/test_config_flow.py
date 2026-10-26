@@ -5,6 +5,9 @@ from unittest.mock import AsyncMock, patch
 from custom_components.catlink.config_flow import _device_label
 from custom_components.catlink.const import (
     CONF_ACCOUNT_ID,
+    CONF_API_BASE,
+    CONF_CLIENT_SERVER,
+    CONF_COUNTRY_CODE,
     CONF_DEVICE_IDS,
     CONF_EMAIL,
     CONF_PHONE,
@@ -14,6 +17,7 @@ from custom_components.catlink.const import (
     DOMAIN,
     ERROR_INVALID_AUTH,
 )
+from custom_components.catlink.helpers import RegionDiscovery
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -61,7 +65,9 @@ def mock_discover_region():
     with patch(
         "custom_components.catlink.config_flow.discover_region",
         new_callable=AsyncMock,
-        return_value=("global", "acc-1"),
+        return_value=RegionDiscovery(
+            "https://app.catlinks.cn/api/", "acc-1", None, None
+        ),
     ):
         yield
 
@@ -149,7 +155,7 @@ async def test_user_step_invalid_auth(
     with patch(
         "custom_components.catlink.config_flow.discover_region",
         new_callable=AsyncMock,
-        return_value=(None, None),
+        return_value=RegionDiscovery(None, None, None, None),
     ):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
@@ -295,7 +301,7 @@ async def test_reauth_flow_invalid_auth(
     with patch(
         "custom_components.catlink.config_flow.discover_region",
         new_callable=AsyncMock,
-        return_value=(None, None),
+        return_value=RegionDiscovery(None, None, None, None),
     ):
         result = await hass.config_entries.flow.async_init(
             DOMAIN,
@@ -473,7 +479,7 @@ async def test_email_step_invalid_auth_stays_on_email_form(
     with patch(
         "custom_components.catlink.config_flow.discover_region",
         new_callable=AsyncMock,
-        return_value=(None, None),
+        return_value=RegionDiscovery(None, None, None, None),
     ):
         result = await _pick_sign_in_method(hass, "email")
         result = await hass.config_entries.flow.async_configure(
@@ -493,7 +499,7 @@ async def test_phone_step_invalid_auth_stays_on_phone_form(
     with patch(
         "custom_components.catlink.config_flow.discover_region",
         new_callable=AsyncMock,
-        return_value=(None, None),
+        return_value=RegionDiscovery(None, None, None, None),
     ):
         result = await _pick_sign_in_method(hass, "phone")
         result = await hass.config_entries.flow.async_configure(
@@ -633,7 +639,9 @@ async def test_email_sign_in_without_account_id_still_dedupes(
     with patch(
         "custom_components.catlink.config_flow.discover_region",
         new_callable=AsyncMock,
-        return_value=("global", None),
+        return_value=RegionDiscovery(
+            "https://app.catlinks.cn/api/", None, None, None
+        ),
     ):
         result = await _pick_sign_in_method(hass, "email")
         result = await hass.config_entries.flow.async_configure(
@@ -817,3 +825,72 @@ async def test_two_accounts_create_two_entries(
 
     entries = hass.config_entries.async_entries(DOMAIN)
     assert {entry.unique_id for entry in entries} == {"acc-1", "acc-2"}
+
+
+async def test_entry_records_client_server_and_country_without_switching(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test the profile's region is stored on the entry but never switches the host."""
+    mock_account.return_value.uid = "acc-1"
+    mock_account.return_value.get_devices = AsyncMock(return_value=[])
+
+    with patch(
+        "custom_components.catlink.config_flow.discover_region",
+        new_callable=AsyncMock,
+        return_value=RegionDiscovery(
+            "https://app.catlinks.cn/api/", "acc-1", "1", "NO"
+        ),
+    ):
+        result = await _pick_sign_in_method(hass, "email")
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_EMAIL: "cat@example.com", "password": "testpass"},
+        )
+
+    assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_CLIENT_SERVER] == "1"
+    assert result["data"][CONF_COUNTRY_CODE] == "NO"
+    assert result["data"][CONF_API_BASE] == "https://app.catlinks.cn/api/"
+
+
+async def test_reauth_discovers_on_the_stored_base(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test re-authentication hands discovery the stored base to sign in on."""
+    mock_account.return_value.uid = "acc-1"
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_PHONE_IAC: "65",
+            CONF_PHONE: "91234567",
+            CONF_ACCOUNT_ID: "acc-1",
+            CONF_API_BASE: "https://app-sgp.catlinks.cn/api/",
+            "password": "oldpass",
+        },
+        unique_id="acc-1",
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.catlink.config_flow.discover_region",
+        new_callable=AsyncMock,
+        return_value=RegionDiscovery(
+            "https://app-sgp.catlinks.cn/api/", "acc-1", None, None
+        ),
+    ) as mock_disc:
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": SOURCE_REAUTH, "entry_id": entry.entry_id},
+            data=entry.data,
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_PHONE: "+6591234567", "password": "newpass"},
+        )
+
+    assert result["type"] == data_entry_flow.FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    mock_disc.assert_awaited_once()
+    assert (
+        mock_disc.call_args.kwargs["api_base"] == "https://app-sgp.catlinks.cn/api/"
+    )
