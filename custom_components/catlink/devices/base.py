@@ -29,6 +29,7 @@ class Device:
         self.account = coordinator.account
         self.listeners = {}
         self._action_error: str | None = None
+        self._warned_causes: set[str] = set()
         self.update_data(dat)
         self.detail = {}
 
@@ -51,6 +52,17 @@ class Device:
         """Store API error and refresh entities so the error sensor updates."""
         self._action_error = error_msg
         self._handle_listeners()
+
+    def warn_once(self, cause: str, msg: str, *args) -> None:
+        """Log at warning level once per Device per distinct cause, not once per poll."""
+        if cause in self._warned_causes:
+            return
+        self._warned_causes.add(cause)
+        _LOGGER.warning(msg, *args)
+
+    def clear_warning(self, cause: str) -> None:
+        """Clear a previously logged warning cause so it can warn again after recovery."""
+        self._warned_causes.discard(cause)
 
     @property
     def id(self) -> str:

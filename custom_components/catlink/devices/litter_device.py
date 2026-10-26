@@ -4,6 +4,7 @@ from collections import deque
 from typing import TYPE_CHECKING
 
 from ..const import _LOGGER
+from ..helpers import optional_float, optional_int
 from ..models.additional_cfg import AdditionalDeviceConfig
 from .base import Device
 from .mixins.logs import LogsMixin
@@ -44,71 +45,59 @@ class LitterDevice(LogsMixin, Device):
             return "unknown"
 
     @property
-    def litter_weight(self) -> float:
-        """Return the litter weight."""
-        litter_weight = 0.0
-        try:
-            cat_litter_weight = self.detail.get(
-                "catLitterWeight", self.empty_litter_box_weight
+    def litter_weight(self) -> float | None:
+        """Return the litter weight, or unknown if the cloud has none."""
+        cat_litter_weight = optional_float(
+            self.detail.get("catLitterWeight"), self, "catLitterWeight"
+        )
+        if cat_litter_weight is None:
+            return None
+        litter_weight = cat_litter_weight - self.empty_litter_box_weight
+        self._litter_weight_during_day.append(litter_weight)
+        if litter_weight == 0.0:
+            _LOGGER.debug(
+                "litter_weight is 0: catLitterWeight=%r, empty_litter_box_weight=%r (detail keys: %s)",
+                cat_litter_weight,
+                self.empty_litter_box_weight,
+                list(self.detail.keys()) if self.detail else "none",
             )
-            litter_weight = cat_litter_weight - self.empty_litter_box_weight
-            self._litter_weight_during_day.append(litter_weight)
-            if litter_weight == 0.0:
-                _LOGGER.debug(
-                    "litter_weight is 0: catLitterWeight=%r, empty_litter_box_weight=%r (detail keys: %s)",
-                    cat_litter_weight,
-                    self.empty_litter_box_weight,
-                    list(self.detail.keys()) if self.detail else "none",
-                )
-        except Exception as exc:
-            _LOGGER.error("Got litter weight failed: %s", exc)
         return litter_weight
 
     @property
-    def litter_remaining_days(self) -> str | int:
-        """Return the litter remaining days."""
-        try:
-            return self.detail.get("litterCountdown", "unknown")
-        except Exception as exc:
-            _LOGGER.error("Get litter remaining days failed: %s", exc)
-            return "unknown"
+    def litter_remaining_days(self) -> int | None:
+        """Return the litter remaining days, or unknown if the cloud has none."""
+        return optional_int(self.detail.get("litterCountdown"), self, "litterCountdown")
 
     @property
-    def total_clean_time(self) -> int:
-        """Return the total clean time."""
-        try:
-            return int(self.detail.get("inductionTimes", 0)) + int(
-                self.detail.get("manualTimes", 0)
+    def total_clean_time(self) -> int | None:
+        """Return the total clean time, or unknown if either count is missing."""
+        induction = optional_int(
+            self.detail.get("inductionTimes"), self, "inductionTimes"
+        )
+        manual = optional_int(self.detail.get("manualTimes"), self, "manualTimes")
+        if induction is None or manual is None:
+            return None
+        return induction + manual
+
+    @property
+    def manual_clean_time(self) -> int | None:
+        """Return the manual clean time, or unknown if the cloud has none."""
+        raw = self.detail.get("manualTimes")
+        result = optional_int(raw, self, "manualTimes")
+        if result == 0:
+            _LOGGER.debug(
+                "manual_clean_time is 0: manualTimes=%r (detail keys: %s)",
+                raw,
+                list(self.detail.keys()) if self.detail else "none",
             )
-        except Exception as exc:
-            _LOGGER.error("Get total clean time failed: %s", exc)
-            return 0
+        return result
 
     @property
-    def manual_clean_time(self) -> int:
-        """Return the manual clean time."""
-        try:
-            raw = self.detail.get("manualTimes", 0)
-            result = int(raw)
-            if result == 0:
-                _LOGGER.debug(
-                    "manual_clean_time is 0: manualTimes=%r (detail keys: %s)",
-                    raw,
-                    list(self.detail.keys()) if self.detail else "none",
-                )
-            return result
-        except Exception as exc:
-            _LOGGER.error("Get manual clean time failed: %s", exc)
-            return 0
-
-    @property
-    def deodorant_countdown(self) -> int:
-        """Return the deodorant countdown."""
-        try:
-            return int(self.detail.get("deodorantCountdown", 0))
-        except Exception as exc:
-            _LOGGER.error("Get deodorant countdown failed: %s", exc)
-            return 0
+    def deodorant_countdown(self) -> int | None:
+        """Return the deodorant countdown, or unknown if the cloud has none."""
+        return optional_int(
+            self.detail.get("deodorantCountdown"), self, "deodorantCountdown"
+        )
 
     @property
     def occupied(self) -> bool:
@@ -144,8 +133,7 @@ class LitterDevice(LogsMixin, Device):
             "alarm_status": self.detail.get("alarmStatus"),
             "weight": self.detail.get("weight"),
             "litter_weight_kg": self.detail.get("catLitterWeight"),
-            "total_clean_times": int(self.detail.get("inductionTimes", 0))
-            + int(self.detail.get("manualTimes", 0)),
+            "total_clean_times": self.total_clean_time,
             "manual_clean_times": self.detail.get("manualTimes"),
             "key_lock": self.detail.get("keyLock"),
             "safe_time": self.detail.get("safeTime"),

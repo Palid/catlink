@@ -84,3 +84,56 @@ class TestParseResponse:
         data = {"deviceInfo": "not a dict"}
         result = parse_response(data, "deviceInfo", LitterDeviceInfo, default={})
         assert result == {}
+
+
+class TestNullableNumericModelFields:
+    """Tests for optional numeric fields when the CatLink Cloud sends null."""
+
+    def test_deodorant_countdown_null_parses_without_error(self) -> None:
+        """Test a null deodorantCountdown parses into the model instead of falling back to raw."""
+        data = {"deviceInfo": {"workStatus": "00", "deodorantCountdown": None}}
+        result = parse_response(data, "deviceInfo", LitterDeviceInfo)
+        assert isinstance(result, LitterDeviceInfo)
+        assert result.deodorantCountdown is None
+
+    def test_deodorant_countdown_absent_defaults_to_none(self) -> None:
+        """Test an absent deodorantCountdown parses as None, not 0."""
+        data = {"deviceInfo": {"workStatus": "00"}}
+        result = parse_response(data, "deviceInfo", LitterDeviceInfo)
+        assert isinstance(result, LitterDeviceInfo)
+        assert result.deodorantCountdown is None
+
+    def test_all_affected_numeric_fields_parse_together_when_null(self) -> None:
+        """Test every affected numeric field can be null in the same response."""
+        data = {
+            "deviceInfo": {
+                "workStatus": "00",
+                "deodorantCountdown": None,
+                "litterCountdown": None,
+                "inductionTimes": None,
+                "manualTimes": None,
+            }
+        }
+        result = parse_response(data, "deviceInfo", LitterDeviceInfo)
+        assert isinstance(result, LitterDeviceInfo)
+        assert result.deodorantCountdown is None
+        assert result.litterCountdown is None
+        assert result.inductionTimes is None
+        assert result.manualTimes is None
+
+    def test_numeric_fields_still_parse_when_present(self) -> None:
+        """Test the affected fields still parse to their numeric value when present."""
+        data = {
+            "deviceInfo": {
+                "deodorantCountdown": 30,
+                "litterCountdown": 5,
+                "inductionTimes": 10,
+                "manualTimes": 5,
+            }
+        }
+        result = parse_response(data, "deviceInfo", LitterDeviceInfo)
+        assert isinstance(result, LitterDeviceInfo)
+        assert result.deodorantCountdown == 30
+        assert result.litterCountdown == 5
+        assert result.inductionTimes == 10
+        assert result.manualTimes == 5
