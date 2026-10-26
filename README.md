@@ -253,6 +253,21 @@ data:
     deviceId: "1234567890"
 ```
 
+### Does this work without the cloud?
+
+Short answer: **no.** This integration reaches your Devices only through the
+CatLink Cloud and the Aliyun Channel; there is no Local Control (state and
+commands exchanged directly between Home Assistant and a Device over your home
+network). A spike against a real Scooper Pro Ultra — static analysis of the
+CatLink app plus consented network probes of the Device — found no local channel:
+no CoAP/ALCS service answered, and the app itself never talks to a Device on the
+home LAN at runtime (the only direct LAN contact is one-shot Wi-Fi provisioning).
+
+If the internet or the vendor cloud is down, the Devices go unavailable. The
+full write-up, evidence, and the follow-up worth doing instead (cloud
+resilience: keep last-known state offline, receive state by push rather than
+polling) are in [`docs/local-control-spike.md`](docs/local-control-spike.md).
+
 ## Changelog
 
 See `CHANGELOG.md` for release notes.
