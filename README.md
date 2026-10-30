@@ -32,6 +32,7 @@
   - [Scooper PRO](#supported-devices-and-operations)
   - [PurePro Fountain](#supported-devices-and-operations)
 - [How to Configure?](#how-to-configure)
+- [One Session per Account](#one-session-per-account)
 - [Services (Optional)](#services-optional)
 - [Changelog](#changelog)
 - [How to contribute?](#how-to-contribute)
@@ -221,19 +222,64 @@ Just use ConfigFlow. Enter your phonenumber (eg. +493034994004) and password. <b
 That's it. <br>
 It will automatically discover your Region, Cats & Devices.
 
+## One Session per Account
+
+The CatLink Cloud allows one Session per Account. Signing in anywhere starts a new Session and ends the previous one, an Eviction. When you sign Home Assistant in on the same Account you use on your phone, each poll reclaims the Session and evicts the phone app, while opening the phone app evicts Home Assistant. Neither side keeps the Session for long.
+
+To keep both working, give Home Assistant its own Account:
+
+1. Create a second CatLink Account (a separate Email or Phone).
+2. In the CatLink phone app, share your Devices to that Account.
+3. Configure this integration with the dedicated Account, or re-authenticate an existing entry to switch it over.
+
+If Home Assistant detects repeated Evictions on one Account, it raises a repair pointing here so you can move to a dedicated Account.
+
 ## Services (Optional)
 
 #### Request API
 
+`catlink.request_api` calls any CatLink Cloud endpoint using the target entity's Account Session. This is the escape hatch for anything this integration does not model yet. The target entity only selects which Account's Session signs the request; it does not have to be related to the endpoint you call. `params` must be a mapping.
+
+The response is returned as service response data, so scripts and automations can use it. It is also shown as a persistent notification by default; pass `throw: false` to suppress it.
+
+> ! Warning: there is no denylist, so this can also reach destructive endpoints, such as unbinding a Device. Only call endpoints you trust.
+
+Read-only call, no parameters:
+
 ```yaml
 service: catlink.request_api
 target:
-  entity_id: sensor.scooper_xxxxxx_state # Any sensor entity in the account
+  entity_id: sensor.scooper_xxxxxx_state # Any sensor entity on the Account
 data:
-  api: /token/device/union/list/sorted
-  params:
-    key: val
+  api: token/device/union/list/sorted
 ```
+
+Call with parameters:
+
+```yaml
+service: catlink.request_api
+target:
+  entity_id: sensor.scooper_xxxxxx_state
+data:
+  api: token/litterbox/aboutDevice
+  params:
+    deviceId: "1234567890"
+```
+
+### Does this work without the cloud?
+
+Short answer: **no.** This integration reaches your Devices only through the
+CatLink Cloud and the Aliyun Channel; there is no Local Control (state and
+commands exchanged directly between Home Assistant and a Device over your home
+network). A spike against a real Scooper Pro Ultra — static analysis of the
+CatLink app plus consented network probes of the Device — found no local channel:
+no CoAP/ALCS service answered, and the app itself never talks to a Device on the
+home LAN at runtime (the only direct LAN contact is one-shot Wi-Fi provisioning).
+
+If the internet or the vendor cloud is down, the Devices go unavailable. The
+full write-up, evidence, and the follow-up worth doing instead (cloud
+resilience: keep last-known state offline, receive state by push rather than
+polling) are in [`docs/local-control-spike.md`](docs/local-control-spike.md).
 
 ## Changelog
 
