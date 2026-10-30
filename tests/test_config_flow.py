@@ -58,6 +58,18 @@ class TestDeviceLabel:
         dat = {"deviceType": "UNKNOWN"}
         assert _device_label(dat, True) == "Unknown (UNKNOWN) - Supported"
 
+    def test_device_label_pro_ultra_third_state(self) -> None:
+        """Test the Scooper Pro Ultra gets its own support label, not Supported."""
+        dat = {
+            "deviceName": "ScooperPROUltra",
+            "model": "ScooperPROUltra",
+            "deviceType": "VISUAL_PRO_ULTRA",
+        }
+        assert _device_label(dat, True) == (
+            "ScooperPROUltra (VISUAL_PRO_ULTRA) - "
+            "Settings supported; live status and cleaning pending"
+        )
+
 
 @pytest.fixture(autouse=True)
 def mock_discover_region():

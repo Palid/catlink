@@ -1,18 +1,22 @@
 """Tests for CatLink entity classes."""
 
+from datetime import time
 from unittest.mock import AsyncMock, MagicMock
 
 from custom_components.catlink.devices.base import Device
 from custom_components.catlink.devices.litterbox import LitterBox
+from custom_components.catlink.devices.scooper_pro_ultra import ScooperProUltraDevice
 from custom_components.catlink.entities.base import CatlinkEntity
 from custom_components.catlink.entities.binary import CatlinkBinarySensorEntity
 from custom_components.catlink.entities.button import CatlinkButtonEntity
 from custom_components.catlink.entities.select import CatlinkSelectEntity
 from custom_components.catlink.entities.sensor import CatlinkSensorEntity
 from custom_components.catlink.entities.switch import CatlinkSwitchEntity
+from custom_components.catlink.entities.time import CatlinkTimeEntity
 import pytest
 
 from homeassistant.const import STATE_OFF, STATE_ON
+from homeassistant.exceptions import HomeAssistantError
 
 
 @pytest.fixture
@@ -318,6 +322,57 @@ class TestCatlinkSelectEntity:
         assert entity._attr_current_option == "manual"
 
 
+class TestCatlinkTimeEntity:
+    """Tests for CatlinkTimeEntity."""
+
+    def test_time_update_sets_native_value(
+        self, hass, mock_device, mock_coordinator
+    ) -> None:
+        """Test time update reads its value from the device property."""
+        mock_device.coordinator = mock_coordinator
+        mock_device.quiet_start = time(23, 0)
+        entity = CatlinkTimeEntity("quiet_start", mock_device, {})
+        entity.coordinator = mock_coordinator
+        entity.hass = hass
+
+        entity.update()
+        assert entity.native_value == time(23, 0)
+        assert entity.state == "23:00:00"
+
+    def test_time_state_none_when_unset(
+        self, hass, mock_device, mock_coordinator
+    ) -> None:
+        """Test the time entity reports no state when the device value is None."""
+        mock_device.coordinator = mock_coordinator
+        mock_device.quiet_start = None
+        entity = CatlinkTimeEntity("quiet_start", mock_device, {})
+        entity.coordinator = mock_coordinator
+        entity.hass = hass
+
+        entity.update()
+        assert entity.native_value is None
+        assert entity.state is None
+
+    async def test_time_set_value_calls_async_set_time(
+        self, hass, mock_device, mock_coordinator
+    ) -> None:
+        """Test async_set_value dispatches to the option's async_set_time callable."""
+        mock_device.coordinator = mock_coordinator
+        mock_device.quiet_start = time(22, 30)
+        mock_set = AsyncMock(return_value=True)
+        entity = CatlinkTimeEntity(
+            "quiet_start", mock_device, {"async_set_time": mock_set}
+        )
+        entity.coordinator = mock_coordinator
+        entity.hass = hass
+        entity.entity_id = "time.litter_box_599_eeff_quiet_start"
+
+        result = await entity.async_set_value(time(22, 30))
+        assert result is True
+        mock_set.assert_called_once_with(time(22, 30), entity=entity)
+        assert entity.native_value == time(22, 30)
+
+
 class TestCatlinkSensorEntity:
     """Tests for CatlinkSensorEntity."""
 
@@ -379,6 +434,40 @@ class TestCatlinkSensorEntity:
         entity.update()
         assert entity._attr_state == 2.5
         assert entity._attr_native_unit_of_measurement == "kg"
+
+    async def test_schedule_service_delegates_to_device(
+        self, hass, mock_coordinator
+    ) -> None:
+        """Test the sensor schedule service dispatches to the Pro Ultra device method."""
+        data = {
+            "id": "ultra1",
+            "mac": "44:72:AC:0D:89:37",
+            "model": "ScooperPROUltra",
+            "deviceName": "ScooperPROUltra",
+            "deviceType": "VISUAL_PRO_ULTRA",
+        }
+        device = ScooperProUltraDevice(data, mock_coordinator)
+        device.coordinator = mock_coordinator
+        device.async_add_timing = AsyncMock(return_value=True)
+        entity = CatlinkSensorEntity("schedules", device, {})
+        entity.coordinator = mock_coordinator
+        entity.hass = hass
+
+        result = await entity.async_add_timing("09:30")
+        assert result is True
+        device.async_add_timing.assert_called_once_with("09:30")
+
+    async def test_schedule_service_rejects_other_device_type(
+        self, hass, mock_device, mock_coordinator
+    ) -> None:
+        """Test the schedule service refuses a non-Pro-Ultra device."""
+        mock_device.coordinator = mock_coordinator
+        entity = CatlinkSensorEntity("last_log", mock_device, {})
+        entity.coordinator = mock_coordinator
+        entity.hass = hass
+
+        with pytest.raises(HomeAssistantError):
+            await entity.async_add_timing("09:30")
 
 
 class TestCatlinkSwitchEntity:

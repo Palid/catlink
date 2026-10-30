@@ -63,6 +63,26 @@ async def async_register_request_api_service(hass: HomeAssistant) -> None:
         "async_request_api",
         supports_response=SupportsResponse.OPTIONAL,
     )
+    platform.async_register_entity_service(
+        "add_timing",
+        {vol.Required("time"): cv.string},
+        "async_add_timing",
+    )
+    platform.async_register_entity_service(
+        "update_timing",
+        {vol.Required("timing_id"): cv.string, vol.Required("time"): cv.string},
+        "async_update_timing",
+    )
+    platform.async_register_entity_service(
+        "remove_timing",
+        {vol.Required("timing_id"): cv.string},
+        "async_remove_timing",
+    )
+    platform.async_register_entity_service(
+        "toggle_timing",
+        {vol.Required("timing_id"): cv.string, vol.Required("enabled"): cv.boolean},
+        "async_toggle_timing",
+    )
 
 
 async def async_setup_platform(
