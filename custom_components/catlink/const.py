@@ -43,9 +43,9 @@ SUPPORTED_DEVICE_TYPES = frozenset(
 )
 
 # Per-device-type override for the config flow support label, for device types
-# that are neither fully "Supported" nor "Limited support".
+# whose support depends on more than the CatLink Account.
 DEVICE_SUPPORT_LABELS: dict[str, str] = {
-    "VISUAL_PRO_ULTRA": "Settings supported; live status and cleaning pending",
+    "VISUAL_PRO_ULTRA": "Supported; needs the Aliyun credentials",
 }
 
 # Device types reachable only over the Aliyun Channel; an Account that owns one

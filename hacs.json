@@ -1,4 +1,5 @@
 {
-  "name": "CatLink",
+  "name": "CatLink (New)",
+  "homeassistant": "2026.2.0",
   "render_readme": true
 }
