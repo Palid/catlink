@@ -42,12 +42,15 @@ from .const import (
     CONF_UPDATE_INTERVAL,
     DEVICE_SUPPORT_LABELS,
     DOMAIN,
+    ERROR_ALIYUN_INVALID,
     ERROR_ALIYUN_REQUIRED,
+    ERROR_CANNOT_CONNECT,
     ERROR_INVALID_AUTH,
     SUPPORTED_DEVICE_TYPES,
 )
 from .helpers import discover_region, parse_phone_number
 from .modules.account import Account
+from .modules.aliyun_channel import AliyunAuthFailed, AliyunRequestFailed
 
 
 def _device_label(dat: dict, supported: bool) -> str:
@@ -133,6 +136,59 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
         if entry_data.get(CONF_EMAIL):
             return await self.async_step_email()
         return await self.async_step_phone()
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Add or change the Aliyun credentials of a configured entry.
+
+        A loaded entry's running Account lists the Devices and tries the new
+        credentials. An entry that is not loaded builds its own Account to list
+        them, which may sign in, and stores the credentials untried.
+        """
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            credentials = _aliyun_credentials(user_input, entry.data)
+            coordinator = (
+                self.hass.data.get(DOMAIN, {})
+                .get("entry_coordinators", {})
+                .get(entry.entry_id)
+            )
+            if coordinator is not None:
+                account = coordinator.account
+            else:
+                account = Account(self.hass, dict(entry.data))
+                await account.async_check_auth()
+            if not account.token:
+                errors["base"] = ERROR_CANNOT_CONNECT
+            elif _lacks_aliyun_credentials(credentials, await account.get_devices()):
+                errors[CONF_ALIYUN_CLOUD_KEY] = ERROR_ALIYUN_REQUIRED
+            elif (
+                coordinator is not None
+                and CONF_ALIYUN_CLOUD_KEY in credentials
+                and CONF_ALIYUN_CLOUD_SECRET in credentials
+            ):
+                try:
+                    await account.async_check_aliyun_credentials(
+                        credentials[CONF_ALIYUN_CLOUD_KEY],
+                        credentials[CONF_ALIYUN_CLOUD_SECRET],
+                    )
+                except AliyunAuthFailed:
+                    errors[CONF_ALIYUN_CLOUD_KEY] = ERROR_ALIYUN_INVALID
+                except AliyunRequestFailed:
+                    errors["base"] = ERROR_CANNOT_CONNECT
+            if not errors:
+                return self.async_update_reload_and_abort(
+                    entry, data_updates=credentials
+                )
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema(_aliyun_fields(entry.data)),
+            errors=errors,
+        )
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -311,6 +367,9 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
         if configured is not None:
             if _account_identifier(configured.data) == title:
                 return self.async_abort(reason="already_configured")
+            config.update(_aliyun_credentials(config, configured.data))
+            if _lacks_aliyun_credentials(config, await account.get_devices()):
+                return None
             self._configured_entry = configured
             return await self.async_step_switch_identifier()
 
@@ -355,10 +414,7 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._configured_entry,
                 unique_id=self._account.uid,
                 title=self._title,
-                data={
-                    **self._config,
-                    **_aliyun_credentials(self._config, self._configured_entry.data),
-                },
+                data=self._config,
                 reason="identifier_switched",
             )
 

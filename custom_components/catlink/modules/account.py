@@ -40,7 +40,7 @@ from ..const import (
     SIGN_KEY,
 )
 from ..helpers import Helper, account_uid, format_api_error
-from .aliyun_channel import AliyunAuthFailed, AliyunChannel
+from .aliyun_channel import AliyunAuthFailed, AliyunChannel, AliyunRequestFailed
 
 API_ALIYUN_AUTH_CODE = "token/user/auth/aliLive/authCode"
 
@@ -421,6 +421,35 @@ class Account:
                 app_secret=app_secret,
             )
         return self._aliyun
+
+    async def async_check_aliyun_credentials(
+        self, app_key: str, app_secret: str
+    ) -> None:
+        """Open a throwaway Aliyun session with these credentials, then drop it.
+
+        The Account's own Aliyun Channel is left alone. The authorisation code is
+        fetched first so that a CatLink Cloud without one raises
+        AliyunRequestFailed rather than passing for rejected credentials.
+        """
+        code = await self._async_aliyun_auth_code()
+        if not code:
+            raise AliyunRequestFailed("CatLink Cloud returned no authorisation code")
+
+        async def issued_code() -> str:
+            return code
+
+        channel = AliyunChannel(
+            self.hass,
+            self.http,
+            self._aliyun_country(),
+            issued_code,
+            app_key=app_key,
+            app_secret=app_secret,
+        )
+        try:
+            await channel.async_open()
+        finally:
+            await channel.async_close()
 
     async def _async_aliyun_auth_code(self) -> str:
         """Fetch a fresh Aliyun authorisation code from the CatLink Cloud.
