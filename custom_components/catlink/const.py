@@ -5,7 +5,7 @@ import logging
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
-from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL
+from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, CONF_SCAN_INTERVAL
 
 DOMAIN = "catlink"
 _LOGGER = logging.getLogger(__name__)
@@ -14,12 +14,20 @@ CONFIG = "config"
 SCAN_INTERVAL = datetime.timedelta(minutes=1)
 
 CONF_ACCOUNTS = "accounts"
+CONF_ACCOUNT_ID = "account_id"
 CONF_API_BASE = "api_base"
 CONF_REGION = "region"
 CONF_USER_ID = "uid"
 CONF_PHONE = "phone"
 CONF_PHONE_IAC = "phone_iac"
 CONF_LANGUAGE = "language"
+CONF_SWITCH_IDENTIFIER = "switch_identifier"
+CONF_CLIENT_SERVER = "client_server"
+CONF_COUNTRY_CODE = "country_code"
+
+# Where the stable cloud Account id sits in the Account profile (see ADR 0001).
+# Verified live on 2026-09-19: `globalId` is present but null, `id` is populated.
+ACCOUNT_ID_PATH = ("appUser", "id")
 
 CONF_CATS = "cats"
 CONF_DEVICE_IDS = "device_ids"
@@ -44,6 +52,24 @@ API_SERVERS: dict[str, str] = {
     "china": "https://app-sh.catlinks.cn/api/",
     "usa": "https://app-usa.catlinks.cn/api/",
     "singapore": "https://app-sgp.catlinks.cn/api/",
+}
+
+# Order the try-each-region fallback is walked in when discovery finds nothing.
+FALLBACK_REGIONS: tuple[str, ...] = ("global", "china", "usa", "singapore")
+
+# Unauthenticated endpoint that returns the cloud's country -> server-host table,
+# the same one the app's onboarding country picker reads before any sign-in.
+AREA_SERVER_LIST_API = "common/areaServerList"
+
+# The market a profile's clientServer value belongs to, keyed to API_SERVERS.
+# Inferred from CatLink Android 4.3.5 (bucket names, analytics labels); the "1"
+# row is contradicted by the owner Account, so this only ever drives a warning,
+# never a host switch.
+CLIENT_SERVER_REGION: dict[str, str] = {
+    "0": "singapore",
+    "1": "usa",
+    "3": "china",
+    "9": "china",
 }
 
 # Config flow error keys
