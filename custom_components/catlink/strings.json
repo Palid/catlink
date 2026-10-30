@@ -7,6 +7,7 @@
       "wrong_account": "That signed in to a different CatLink Account than this entry. Re-authenticate with the Account Identifier this entry already uses."
     },
     "error": {
+      "aliyun_required": "This Account owns a Scooper Pro Ultra, which is reachable only over the Aliyun Channel. Enter the Aliyun app key and secret.",
       "cannot_connect": "Cannot connect to CatLink servers. Please check your internet connection and try again.",
       "invalid_auth": "Authentication failed. Please check your credentials and try again."
     },
@@ -20,18 +21,22 @@
         "title": "How do you sign in to the CatLink app?"
       },
       "email": {
-        "description": "Enter the Email and password you sign in to the CatLink app with.",
+        "description": "Enter the Email and password you sign in to the CatLink app with. If the Account owns a Scooper Pro Ultra, also enter the Aliyun app key and secret; otherwise leave them blank. When re-authenticating, a blank secret keeps the stored one.",
         "data": {
           "email": "Email",
-          "password": "Password"
+          "password": "Password",
+          "aliyun_cloud_key": "Aliyun app key",
+          "aliyun_cloud_secret": "Aliyun app secret"
         },
         "title": "Sign in with Email"
       },
       "phone": {
-        "description": "Enter your full phone number with country code (e.g. +447911123456) and the password you sign in to the CatLink app with.",
+        "description": "Enter your full phone number with country code (e.g. +447911123456) and the password you sign in to the CatLink app with. If the Account owns a Scooper Pro Ultra, also enter the Aliyun app key and secret; otherwise leave them blank. When re-authenticating, a blank secret keeps the stored one.",
         "data": {
           "phone": "Phone number",
-          "password": "Password"
+          "password": "Password",
+          "aliyun_cloud_key": "Aliyun app key",
+          "aliyun_cloud_secret": "Aliyun app secret"
         },
         "title": "Sign in with a phone number"
       },

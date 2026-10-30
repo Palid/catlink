@@ -22,6 +22,8 @@ from ..const import (
     _LOGGER,
     ACCOUNT_ID_PATH,
     CONF_ACCOUNT_ID,
+    CONF_ALIYUN_CLOUD_KEY,
+    CONF_ALIYUN_CLOUD_SECRET,
     CONF_API_BASE,
     CONF_CLIENT_SERVER,
     CONF_COUNTRY_CODE,
@@ -38,7 +40,7 @@ from ..const import (
     SIGN_KEY,
 )
 from ..helpers import Helper, account_uid, format_api_error
-from .aliyun_channel import AliyunChannel
+from .aliyun_channel import AliyunAuthFailed, AliyunChannel
 
 API_ALIYUN_AUTH_CODE = "token/user/auth/aliLive/authCode"
 
@@ -406,11 +408,17 @@ class Account:
     async def async_aliyun_channel(self) -> AliyunChannel:
         """Return the Aliyun Channel, opening it lazily on first request."""
         if self._aliyun is None:
+            app_key = self.get_config(CONF_ALIYUN_CLOUD_KEY)
+            app_secret = self.get_config(CONF_ALIYUN_CLOUD_SECRET)
+            if not app_key or not app_secret:
+                raise AliyunAuthFailed("Aliyun credentials are not configured")
             self._aliyun = AliyunChannel(
                 self.hass,
                 self.http,
                 self._aliyun_country(),
                 self._async_aliyun_auth_code,
+                app_key=app_key,
+                app_secret=app_secret,
             )
         return self._aliyun
 

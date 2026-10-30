@@ -24,6 +24,8 @@ CONF_LANGUAGE = "language"
 CONF_SWITCH_IDENTIFIER = "switch_identifier"
 CONF_CLIENT_SERVER = "client_server"
 CONF_COUNTRY_CODE = "country_code"
+CONF_ALIYUN_CLOUD_KEY = "aliyun_cloud_key"
+CONF_ALIYUN_CLOUD_SECRET = "aliyun_cloud_secret"
 
 # Where the stable cloud Account id sits in the Account profile (see ADR 0001).
 # Verified live on 2026-09-19: `globalId` is present but null, `id` is populated.
@@ -45,6 +47,10 @@ SUPPORTED_DEVICE_TYPES = frozenset(
 DEVICE_SUPPORT_LABELS: dict[str, str] = {
     "VISUAL_PRO_ULTRA": "Settings supported; live status and cleaning pending",
 }
+
+# Device types reachable only over the Aliyun Channel; an Account that owns one
+# must give the config flow the Aliyun credentials.
+ALIYUN_CHANNEL_DEVICE_TYPES = frozenset({"VISUAL_PRO_ULTRA"})
 
 # API server regions: value is the API base URL
 API_SERVERS: dict[str, str] = {
@@ -75,6 +81,7 @@ CLIENT_SERVER_REGION: dict[str, str] = {
 # Config flow error keys
 ERROR_CANNOT_CONNECT = "cannot_connect"
 ERROR_INVALID_AUTH = "invalid_auth"
+ERROR_ALIYUN_REQUIRED = "aliyun_required"
 
 SIGN_KEY = "00109190907746a7ad0e2139b6d09ce47551770157fe4ac5922f3a5454c82712"
 RSA_PUBLIC_KEY = (
@@ -94,12 +101,8 @@ RSA_PRIVATE_KEY = (
     "I0eGQrD/W4rBeoCX8sJDCH49lMsec52TFI2Gn8tTKOCqqgGvRSKDJ005HlnmKw=="
 )
 
-# Aliyun Channel bootstrap host and the international ("google") app credentials.
-# The owner must transcribe both from com/catlinks/app/common/AppApplication.java:214-215
-# (international branch, CatLink Android 4.3.5) into these placeholders before any
-# live use, and must separately approve pushing that commit to the public fork.
-ALIYUN_APP_KEY = ""
-ALIYUN_APP_SECRET = ""
+# Aliyun Channel bootstrap host. The app key and secret are not shipped here;
+# each config entry carries them (CONF_ALIYUN_CLOUD_KEY / CONF_ALIYUN_CLOUD_SECRET).
 ALIYUN_DOMAIN = "api.link.aliyun.com"
 
 SUPPORTED_DOMAINS = [

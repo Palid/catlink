@@ -741,8 +741,8 @@ class ScooperProUltraDevice(LitterDevice):
         iot_id = self.iot_id
         if not iot_id:
             raise HomeAssistantError(f"{self.name} has no Aliyun device id")
-        channel = await self.account.async_aliyun_channel()
         try:
+            channel = await self.account.async_aliyun_channel()
             await channel.async_set_properties(iot_id, {identifier: value})
         except AliyunAuthFailed as exc:
             raise ConfigEntryAuthFailed(str(exc)) from exc
