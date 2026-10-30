@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import hmac
 import json
 from types import SimpleNamespace
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 from aiohttp import ClientError
 from custom_components.catlink.modules.aliyun_channel import (
@@ -19,6 +20,7 @@ from custom_components.catlink.modules.aliyun_channel import (
 import pytest
 
 REGION_PATH = "/living/account/region/get"
+OA_LOGIN_PATH = "/api/prd/loginbyoauth.json"
 CREATE_PATH = "/account/createSessionByAuthCode"
 REFRESH_PATH = "/account/checkOrRefreshSession"
 GET_PATH = "/thing/properties/get"
@@ -67,9 +69,12 @@ class FakeSession:
         if self.error is not None:
             raise self.error
         path = urlparse(url).path
-        body = json.loads(data) if data else {}
+        if headers["content-type"].startswith("application/x-www-form-urlencoded"):
+            body = {key: json.loads(value) for key, value in parse_qsl(data)}
+        else:
+            body = json.loads(data) if data else {}
         self.requests.append(
-            SimpleNamespace(url=url, path=path, headers=headers, body=body)
+            SimpleNamespace(url=url, path=path, headers=headers, body=body, raw=data)
         )
         handler = self._handlers.get(path)
         payload = handler(body) if callable(handler) else handler
@@ -101,6 +106,37 @@ def _region_ok():
     }
 
 
+def _oa_login_ok():
+    """Return an OpenAccount loginbyoauth success body."""
+    return {
+        "data": {
+            "code": 1,
+            "message": "success",
+            "data": {"loginSuccessResult": {"sid": "OASID1", "sidExpireIn": 86400}},
+        }
+    }
+
+
+def _oa_signature(request) -> str:
+    """Recompute the OpenAccount HmacSHA1 signature over the x-ca headers and form."""
+    headers = request.headers
+    signed = headers["x-ca-signature-headers"].split(",")
+    form = sorted(parse_qsl(request.raw))
+    text = "\n".join(
+        [
+            "POST",
+            headers["accept"],
+            "",
+            headers["content-type"],
+            headers["date"],
+            *(f"{key}:{headers[key]}" for key in signed),
+            f"{request.path}?" + "&".join(f"{k}={v}" for k, v in form),
+        ]
+    )
+    digest = hmac.new(b"test-secret", text.encode(), hashlib.sha1).digest()
+    return base64.b64encode(digest).decode()
+
+
 def make_channel(session, auth_code_fn, country="SG"):
     """Build a channel wired to the fake session with dummy credentials."""
     return AliyunChannel(
@@ -124,9 +160,10 @@ async def _counting_auth_code(counter, code="AUTHCODE1"):
 
 
 async def test_opens_session_from_auth_code() -> None:
-    """A session opens: region lookup then createSessionByAuthCode."""
+    """A session opens: region lookup, OpenAccount sign-in, then createSessionByAuthCode."""
     session = FakeSession()
     session.route(REGION_PATH, _region_ok())
+    session.route(OA_LOGIN_PATH, _oa_login_ok())
     session.route(CREATE_PATH, _session_data())
     calls: list[str] = []
 
@@ -138,28 +175,55 @@ async def test_opens_session_from_auth_code() -> None:
     await channel.async_open()
 
     assert calls == ["code"]
-    assert session.count(REGION_PATH) == 1
-    assert session.count(CREATE_PATH) == 1
-    create = session.last(CREATE_PATH)
-    assert create.body["request"]["apiVer"] == "1.0.4"
-    assert create.body["params"]["request"] == {
-        "authCode": "AUTHCODE1",
-        "accountType": "OA_SESSION",
-        "appKey": "test-key",
-    }
-    assert create.headers["x-ca-key"] == "test-key"
+    assert [r.path for r in session.requests] == [
+        REGION_PATH,
+        OA_LOGIN_PATH,
+        CREATE_PATH,
+    ]
     region = session.last(REGION_PATH)
     assert region.body["params"] == {
         "authCode": "AUTHCODE1",
         "type": "THIRD_AUTHCODE",
         "countryCode": "SG",
     }
+    login = session.last(OA_LOGIN_PATH)
+    assert urlparse(login.url).hostname == "oa.example.com"
+    assert login.body == {
+        "loginByOauthRequest": {
+            "oauthPlateform": 23,
+            "oauthAppKey": "test-key",
+            "authCode": "AUTHCODE1",
+            "country": "SG",
+            "riskControlInfo": {
+                "platformName": "android",
+                "USE_OA_PWD_ENCRYPT": "true",
+                "USE_H5_NC": "true",
+                "signType": "RSA",
+            },
+        }
+    }
+    assert login.headers["x-ca-key"] == "test-key"
+    assert login.headers["x-ca-signature-method"] == "HmacSHA1"
+    assert login.headers["x-ca-signature-headers"] == (
+        "x-ca-key,x-ca-nonce,x-ca-signature-method,x-ca-timestamp"
+    )
+    assert login.headers["x-ca-signature"] == _oa_signature(login)
+    create = session.last(CREATE_PATH)
+    assert urlparse(create.url).hostname == "gw.example.com"
+    assert create.body["request"]["apiVer"] == "1.0.4"
+    assert create.body["params"]["request"] == {
+        "authCode": "OASID1",
+        "accountType": "OA_SESSION",
+        "appKey": "test-key",
+    }
+    assert create.headers["x-ca-key"] == "test-key"
 
 
 async def test_get_properties_for_iot_id() -> None:
     """Reading properties hits /thing/properties/get and flattens data.<id>.value."""
     session = FakeSession()
     session.route(REGION_PATH, _region_ok())
+    session.route(OA_LOGIN_PATH, _oa_login_ok())
     session.route(CREATE_PATH, _session_data())
     session.route(
         GET_PATH,
@@ -194,6 +258,7 @@ async def test_set_properties_for_iot_id() -> None:
     """Writing properties hits /living/thing/properties/set with iotId and items."""
     session = FakeSession()
     session.route(REGION_PATH, _region_ok())
+    session.route(OA_LOGIN_PATH, _oa_login_ok())
     session.route(CREATE_PATH, _session_data())
     session.route(SET_PATH, {"code": 200, "data": {}})
     channel = make_channel(session, (await _counting_auth_code([])))
@@ -215,6 +280,7 @@ async def test_refreshes_ahead_of_expiry() -> None:
     """A token inside the hour margin triggers exactly one checkOrRefreshSession."""
     session = FakeSession()
     session.route(REGION_PATH, _region_ok())
+    session.route(OA_LOGIN_PATH, _oa_login_ok())
     session.route(CREATE_PATH, _session_data(iot_expire=100, refresh_expire=864000))
     session.route(REFRESH_PATH, _session_data(iot_expire=86400, token="tok2"))
     session.route(GET_PATH, {"code": 200, "data": {}})
@@ -232,6 +298,7 @@ async def test_refresh_happens_once_under_concurrency() -> None:
     """Ten concurrent reads refresh the session exactly once."""
     session = FakeSession()
     session.route(REGION_PATH, _region_ok())
+    session.route(OA_LOGIN_PATH, _oa_login_ok())
     session.route(CREATE_PATH, _session_data(iot_expire=100, refresh_expire=864000))
     session.route(REFRESH_PATH, _session_data(iot_expire=86400, token="tok2"))
     session.route(GET_PATH, {"code": 200, "data": {}})
@@ -250,6 +317,7 @@ async def test_refresh_failure_falls_back_to_new_auth_code() -> None:
     """A rejected refresh (2401) falls back to a fresh auth code and createSession."""
     session = FakeSession()
     session.route(REGION_PATH, _region_ok())
+    session.route(OA_LOGIN_PATH, _oa_login_ok())
     session.route(CREATE_PATH, _session_data(iot_expire=100, refresh_expire=864000))
     session.route(REFRESH_PATH, {"code": 2401, "message": "session expired"})
     session.route(GET_PATH, {"code": 200, "data": {}})
@@ -265,6 +333,7 @@ async def test_refresh_failure_falls_back_to_new_auth_code() -> None:
     await channel.async_get_properties("IOTID26CHAR")
 
     assert len(calls) == 2
+    assert session.count(OA_LOGIN_PATH) == 2
     assert session.count(CREATE_PATH) == 2
     assert session.count(REFRESH_PATH) == 1
 
@@ -286,6 +355,7 @@ async def test_transport_error_becomes_request_failed() -> None:
     """An aiohttp transport error surfaces as AliyunRequestFailed, never a raw client error."""
     session = FakeSession()
     session.route(REGION_PATH, _region_ok())
+    session.route(OA_LOGIN_PATH, _oa_login_ok())
     session.route(CREATE_PATH, _session_data())
     channel = make_channel(session, (await _counting_auth_code([])))
     await channel.async_open()
@@ -299,6 +369,7 @@ async def test_create_session_failure_is_auth_failed() -> None:
     """A rejected createSessionByAuthCode raises AliyunAuthFailed for reauth."""
     session = FakeSession()
     session.route(REGION_PATH, _region_ok())
+    session.route(OA_LOGIN_PATH, _oa_login_ok())
     session.route(CREATE_PATH, {"code": 29020, "message": "bad auth code"})
     channel = make_channel(session, (await _counting_auth_code([])))
 
@@ -306,10 +377,36 @@ async def test_create_session_failure_is_auth_failed() -> None:
         await channel.async_open()
 
 
+async def test_oa_login_failure_is_auth_failed() -> None:
+    """A rejected OpenAccount sign-in raises AliyunAuthFailed and opens no session."""
+    session = FakeSession()
+    session.route(REGION_PATH, _region_ok())
+    session.route(OA_LOGIN_PATH, {"data": {"code": 2, "message": "auth code invalid"}})
+    channel = make_channel(session, (await _counting_auth_code([])))
+
+    with pytest.raises(AliyunAuthFailed):
+        await channel.async_open()
+    assert session.count(CREATE_PATH) == 0
+
+
+async def test_region_without_oa_endpoint_is_request_failed() -> None:
+    """A region answer naming no OpenAccount endpoint stops before signing in."""
+    session = FakeSession()
+    session.route(
+        REGION_PATH, {"code": 200, "data": {"apiGatewayEndpoint": "gw.example.com"}}
+    )
+    channel = make_channel(session, (await _counting_auth_code([])))
+
+    with pytest.raises(AliyunRequestFailed):
+        await channel.async_open()
+    assert session.count(OA_LOGIN_PATH) == 0
+
+
 async def test_non_json_body_becomes_request_failed() -> None:
     """A non-JSON body (a decode error) surfaces as AliyunRequestFailed, not ValueError."""
     session = FakeSession()
     session.route(REGION_PATH, _region_ok())
+    session.route(OA_LOGIN_PATH, _oa_login_ok())
     session.route(CREATE_PATH, _session_data())
     session.route(GET_PATH, json.JSONDecodeError("Expecting value", "<html>", 0))
     channel = make_channel(session, (await _counting_auth_code([])))
@@ -323,6 +420,7 @@ async def test_incomplete_session_is_request_failed() -> None:
     """A 200 missing a session field raises an AliyunError, never a bare KeyError."""
     session = FakeSession()
     session.route(REGION_PATH, _region_ok())
+    session.route(OA_LOGIN_PATH, _oa_login_ok())
     session.route(
         CREATE_PATH,
         {

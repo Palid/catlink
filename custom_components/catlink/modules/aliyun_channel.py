@@ -1,9 +1,10 @@
 """Device-agnostic Aliyun Channel client for CatLink camera-generation devices.
 
 The flow mirrors PyMammotion's production sequence: a CatLink Cloud authorisation
-code opens an Aliyun IoT session (region lookup, then createSessionByAuthCode),
-which is refreshed ahead of expiry and used to read and write a device's Thing
-Properties. The request signature is written here rather than pulled from
+code opens an Aliyun IoT session (region lookup, OpenAccount sign-in, then
+createSessionByAuthCode with the OpenAccount session id), which is refreshed
+ahead of expiry and used to read and write a device's Thing Properties. The
+request signature is written here rather than pulled from
 ``alibabacloud-iot-api-gateway`` so the integration stays dependency-free.
 """
 
@@ -18,6 +19,7 @@ import hmac
 import json
 import time
 from typing import Any
+from urllib.parse import urlencode
 import uuid
 
 import aiohttp
@@ -28,12 +30,24 @@ from ..const import _LOGGER, ALIYUN_DOMAIN
 REFRESH_MARGIN = 3600
 
 _REGION_PATH = "/living/account/region/get"
+_OA_LOGIN_PATH = "/api/prd/loginbyoauth.json"
 _CREATE_SESSION_PATH = "/account/createSessionByAuthCode"
 _REFRESH_SESSION_PATH = "/account/checkOrRefreshSession"
 _PROPERTIES_GET_PATH = "/thing/properties/get"
 _PROPERTIES_SET_PATH = "/living/thing/properties/set"
 
 _SESSION_EXPIRED_CODES = frozenset({2401, 29003, 460})
+
+_OA_PLATFORM_THIRD_AUTHCODE = 23
+_OA_SUCCESS_CODES = frozenset({1, 100})
+# The fixed entries of the app's riskControlInfo; its device-specific entries
+# (umidToken, utdid, deviceId, model, ...) have no Home Assistant counterpart.
+_OA_RISK_CONTROL_INFO = {
+    "platformName": "android",
+    "USE_OA_PWD_ENCRYPT": "true",
+    "USE_H5_NC": "true",
+    "signType": "RSA",
+}
 
 # Every field createSessionByAuthCode / checkOrRefreshSession must return on a 200.
 _SESSION_FIELDS = (
@@ -183,11 +197,12 @@ class AliyunChannel:
             raise AliyunAuthFailed(f"authorisation code request failed: {exc}") from exc
         if not auth_code:
             raise AliyunAuthFailed("CatLink Cloud returned no authorisation code")
-        self._endpoint = await self._async_region(auth_code)
-        await self._async_create_session(auth_code)
+        self._endpoint, oa_endpoint = await self._async_region(auth_code)
+        session_id = await self._async_oa_login(oa_endpoint, auth_code)
+        await self._async_create_session(session_id)
 
-    async def _async_region(self, auth_code: str) -> str:
-        """Look up the account's API gateway endpoint."""
+    async def _async_region(self, auth_code: str) -> tuple[str, str]:
+        """Look up the account's API gateway and OpenAccount endpoints."""
         payload = await self._async_send(
             ALIYUN_DOMAIN,
             _REGION_PATH,
@@ -203,20 +218,48 @@ class AliyunChannel:
             raise AliyunRequestFailed(
                 payload.get("message") or "region lookup failed", payload.get("code")
             )
-        endpoint = (payload.get("data") or {}).get("apiGatewayEndpoint")
-        if not endpoint:
-            raise AliyunRequestFailed("region lookup returned no gateway endpoint")
-        return endpoint
+        data = payload.get("data") or {}
+        endpoint = data.get("apiGatewayEndpoint")
+        oa_endpoint = data.get("oaApiGatewayEndpoint")
+        if not endpoint or not oa_endpoint:
+            raise AliyunRequestFailed(
+                "region lookup returned no gateway or OpenAccount endpoint"
+            )
+        return endpoint, oa_endpoint
 
-    async def _async_create_session(self, auth_code: str) -> None:
-        """Exchange the authorisation code for an IoT session."""
+    async def _async_oa_login(self, host: str, auth_code: str) -> str:
+        """Sign in to OpenAccount with the authorisation code; return its session id."""
+        form = {
+            "loginByOauthRequest": json.dumps(
+                {
+                    "oauthPlateform": _OA_PLATFORM_THIRD_AUTHCODE,
+                    "oauthAppKey": self._app_key,
+                    "authCode": auth_code,
+                    "country": self._country,
+                    "riskControlInfo": _OA_RISK_CONTROL_INFO,
+                },
+                separators=(",", ":"),
+            )
+        }
+        headers = self._build_oa_headers(host, _OA_LOGIN_PATH, form)
+        payload = await self._async_post(host, _OA_LOGIN_PATH, urlencode(form), headers)
+        result = payload.get("data") or {}
+        login = (result.get("data") or {}).get("loginSuccessResult") or {}
+        if result.get("code") not in _OA_SUCCESS_CODES or not login.get("sid"):
+            raise AliyunAuthFailed(
+                result.get("message") or "OpenAccount loginbyoauth rejected"
+            )
+        return login["sid"]
+
+    async def _async_create_session(self, session_id: str) -> None:
+        """Exchange the OpenAccount session id for an IoT session."""
         payload = await self._async_send(
             self._endpoint,
             _CREATE_SESSION_PATH,
             "1.0.4",
             {
                 "request": {
-                    "authCode": auth_code,
+                    "authCode": session_id,
                     "accountType": "OA_SESSION",
                     "appKey": self._app_key,
                 }
@@ -287,6 +330,12 @@ class AliyunChannel:
             }
         )
         headers = self._build_headers(host, path, body)
+        return await self._async_post(host, path, body, headers)
+
+    async def _async_post(
+        self, host: str, path: str, body: str, headers: dict[str, str]
+    ) -> dict:
+        """Post one signed body, returning its parsed payload."""
         url = f"https://{host}{path}"
         try:
             resp = await self._session.post(url, data=body, headers=headers)
@@ -319,14 +368,46 @@ class AliyunChannel:
             "content-type": "application/octet-stream",
             "content-md5": content_md5,
         }
-        signature, signed = self._sign("POST", path, headers)
-        headers["x-ca-signature"] = signature
-        headers["x-ca-signature-headers"] = signed
+        signed = sorted(k for k in headers if k not in _MOVE_HEADERS)
+        headers["x-ca-signature"] = self._sign(
+            "POST", path, headers, signed, hashlib.sha256
+        )
+        headers["x-ca-signature-headers"] = ",".join(signed)
         return headers
 
-    def _sign(self, method: str, path: str, headers: dict[str, str]) -> tuple[str, str]:
-        """Return the HMAC-SHA256 gateway signature and its signed-header list."""
-        signed = sorted(k for k in headers if k not in _MOVE_HEADERS)
+    def _build_oa_headers(
+        self, host: str, path: str, form: dict[str, str]
+    ) -> dict[str, str]:
+        """Build the OpenAccount gateway headers and append its HmacSHA1 signature."""
+        headers = {
+            "host": host,
+            "date": formatdate(usegmt=True),
+            "x-ca-timestamp": str(int(time.time() * 1000)),
+            "x-ca-nonce": str(uuid.uuid4()),
+            "x-ca-key": self._app_key,
+            "x-ca-signature-method": "HmacSHA1",
+            "ca_version": "1",
+            "accept": "application/json; charset=utf-8",
+            "user-agent": "HomeAssistant-CatLink",
+            "content-type": "application/x-www-form-urlencoded; charset=utf-8",
+        }
+        signed = sorted(k for k in headers if k.startswith("x-ca-"))
+        resource = f"{path}?" + "&".join(f"{k}={v}" for k, v in sorted(form.items()))
+        headers["x-ca-signature"] = self._sign(
+            "POST", resource, headers, signed, hashlib.sha1
+        )
+        headers["x-ca-signature-headers"] = ",".join(signed)
+        return headers
+
+    def _sign(
+        self,
+        method: str,
+        resource: str,
+        headers: dict[str, str],
+        signed: list[str],
+        digestmod: Callable[..., Any],
+    ) -> str:
+        """Return the base64 HMAC gateway signature over the signed headers."""
         header_block = "\n".join(f"{k}:{headers[k]}" for k in signed)
         string_to_sign = "\n".join(
             [
@@ -336,10 +417,10 @@ class AliyunChannel:
                 headers.get("content-type", ""),
                 headers.get("date", ""),
                 header_block,
-                path,
+                resource,
             ]
         )
         digest = hmac.new(
-            self._app_secret.encode(), string_to_sign.encode(), hashlib.sha256
+            self._app_secret.encode(), string_to_sign.encode(), digestmod
         ).digest()
-        return base64.b64encode(digest).decode(), ",".join(signed)
+        return base64.b64encode(digest).decode()
