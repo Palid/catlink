@@ -1,6 +1,6 @@
 """Tests for CatLink config flow."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from custom_components.catlink.config_flow import _device_label
 from custom_components.catlink.const import (
@@ -17,10 +17,16 @@ from custom_components.catlink.const import (
     CONF_SWITCH_IDENTIFIER,
     CONF_UPDATE_INTERVAL,
     DOMAIN,
+    ERROR_ALIYUN_INVALID,
     ERROR_ALIYUN_REQUIRED,
+    ERROR_CANNOT_CONNECT,
     ERROR_INVALID_AUTH,
 )
 from custom_components.catlink.helpers import RegionDiscovery
+from custom_components.catlink.modules.aliyun_channel import (
+    AliyunAuthFailed,
+    AliyunRequestFailed,
+)
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 import voluptuous as vol
@@ -1136,5 +1142,260 @@ async def test_switch_identifier_keeps_the_aliyun_credentials(
 
     assert result["reason"] == "identifier_switched"
     assert entry.data[CONF_EMAIL] == "cat@example.com"
+    assert entry.data[CONF_ALIYUN_CLOUD_KEY] == "test-aliyun-key"
+    assert entry.data[CONF_ALIYUN_CLOUD_SECRET] == "test-aliyun-secret"
+
+
+async def test_switch_identifier_requires_aliyun_credentials_for_pro_ultra(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test switching an entry with no Aliyun credentials asks for them for a Pro Ultra."""
+    mock_account.return_value.uid = "acc-1"
+    mock_account.return_value.get_devices = AsyncMock(return_value=[PRO_ULTRA])
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_PHONE_IAC: "86",
+            CONF_PHONE: "13812345678",
+            CONF_ACCOUNT_ID: "acc-1",
+            CONF_API_BASE: "https://app.catlinks.cn/api/",
+            "password": "oldpass",
+        },
+        unique_id="acc-1",
+    )
+    entry.add_to_hass(hass)
+
+    result = await _pick_sign_in_method(hass, "email")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_EMAIL: "cat@example.com", "password": "testpass"},
+    )
+
+    assert result["step_id"] == "email"
+    assert result["errors"] == {CONF_ALIYUN_CLOUD_KEY: ERROR_ALIYUN_REQUIRED}
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_EMAIL: "cat@example.com",
+            "password": "testpass",
+            CONF_ALIYUN_CLOUD_KEY: "test-aliyun-key",
+            CONF_ALIYUN_CLOUD_SECRET: "test-aliyun-secret",
+        },
+    )
+    assert result["step_id"] == "switch_identifier"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_SWITCH_IDENTIFIER: True}
+    )
+
+    assert result["reason"] == "identifier_switched"
+    assert entry.data[CONF_ALIYUN_CLOUD_KEY] == "test-aliyun-key"
+    assert entry.data[CONF_ALIYUN_CLOUD_SECRET] == "test-aliyun-secret"
+
+
+def _email_entry(hass: HomeAssistant, **aliyun: str) -> MockConfigEntry:
+    """Add a configured Email entry holding the given Aliyun credentials, if any."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_EMAIL: "cat@example.com",
+            CONF_ACCOUNT_ID: "acc-1",
+            CONF_API_BASE: "https://app.catlinks.cn/api/",
+            "password": "testpass",
+            **aliyun,
+        },
+        unique_id="acc-1",
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+def _running_account(
+    hass: HomeAssistant, entry: MockConfigEntry, devices: list[dict]
+) -> MagicMock:
+    """Register a running Account for the entry the way async_setup_entry does."""
+    account = MagicMock()
+    account.token = "test-token"
+    account.get_devices = AsyncMock(return_value=devices)
+    account.async_check_aliyun_credentials = AsyncMock()
+    hass.data.setdefault(DOMAIN, {}).setdefault("entry_coordinators", {})[
+        entry.entry_id
+    ] = MagicMock(account=account)
+    return account
+
+
+@pytest.fixture
+def mock_setup_entry():
+    """Stand in for entry setup so the reload after a reconfigure stays offline."""
+    with patch(
+        "custom_components.catlink.async_setup_entry", return_value=True
+    ) as mock:
+        yield mock
+
+
+async def test_reconfigure_adds_aliyun_credentials_after_trying_them(
+    hass: HomeAssistant, enable_custom_integrations, mock_setup_entry
+) -> None:
+    """Test reconfigure tries the credentials on the running Account, then stores them."""
+    entry = _email_entry(hass)
+    account = _running_account(hass, entry, [PRO_ULTRA])
+
+    result = await entry.start_reconfigure_flow(hass)
+
+    assert result["type"] == data_entry_flow.FlowResultType.FORM
+    assert result["step_id"] == "reconfigure"
+    assert {str(key) for key in result["data_schema"].schema} == {
+        CONF_ALIYUN_CLOUD_KEY,
+        CONF_ALIYUN_CLOUD_SECRET,
+    }
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_ALIYUN_CLOUD_KEY: " test-aliyun-key ",
+            CONF_ALIYUN_CLOUD_SECRET: "test-aliyun-secret",
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] == data_entry_flow.FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    account.async_check_aliyun_credentials.assert_awaited_once_with(
+        "test-aliyun-key", "test-aliyun-secret"
+    )
+    assert entry.data[CONF_ALIYUN_CLOUD_KEY] == "test-aliyun-key"
+    assert entry.data[CONF_ALIYUN_CLOUD_SECRET] == "test-aliyun-secret"
+    assert entry.data["password"] == "testpass"
+    mock_setup_entry.assert_awaited_once()
+
+
+async def test_reconfigure_keeps_the_stored_secret_when_left_blank(
+    hass: HomeAssistant, enable_custom_integrations, mock_setup_entry
+) -> None:
+    """Test reconfigure prefills only the key and keeps the stored secret when blank."""
+    entry = _email_entry(
+        hass,
+        **{
+            CONF_ALIYUN_CLOUD_KEY: "test-aliyun-key",
+            CONF_ALIYUN_CLOUD_SECRET: "test-aliyun-secret",
+        },
+    )
+    account = _running_account(hass, entry, [PRO_ULTRA])
+
+    result = await entry.start_reconfigure_flow(hass)
+    defaults = _schema_defaults(result)
+    assert defaults[CONF_ALIYUN_CLOUD_KEY] == "test-aliyun-key"
+    assert CONF_ALIYUN_CLOUD_SECRET not in defaults
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_ALIYUN_CLOUD_KEY: "test-rotated-key"}
+    )
+
+    assert result["reason"] == "reconfigure_successful"
+    account.async_check_aliyun_credentials.assert_awaited_once_with(
+        "test-rotated-key", "test-aliyun-secret"
+    )
+    assert entry.data[CONF_ALIYUN_CLOUD_KEY] == "test-rotated-key"
+    assert entry.data[CONF_ALIYUN_CLOUD_SECRET] == "test-aliyun-secret"
+
+
+async def test_reconfigure_requires_aliyun_credentials_for_pro_ultra(
+    hass: HomeAssistant, enable_custom_integrations, mock_setup_entry
+) -> None:
+    """Test reconfigure will not save empty credentials for a Scooper Pro Ultra."""
+    entry = _email_entry(hass)
+    account = _running_account(hass, entry, [PRO_ULTRA])
+
+    result = await entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_ALIYUN_CLOUD_KEY: "  "}
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.FORM
+    assert result["step_id"] == "reconfigure"
+    assert result["errors"] == {CONF_ALIYUN_CLOUD_KEY: ERROR_ALIYUN_REQUIRED}
+    account.async_check_aliyun_credentials.assert_not_awaited()
+    assert CONF_ALIYUN_CLOUD_KEY not in entry.data
+
+
+@pytest.mark.parametrize(
+    ("failure", "errors"),
+    [
+        (
+            AliyunAuthFailed("OpenAccount loginbyoauth rejected"),
+            {CONF_ALIYUN_CLOUD_KEY: ERROR_ALIYUN_INVALID},
+        ),
+        (AliyunRequestFailed("transport error"), {"base": ERROR_CANNOT_CONNECT}),
+    ],
+)
+async def test_reconfigure_reports_a_failed_aliyun_check(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+    mock_setup_entry,
+    failure: Exception,
+    errors: dict,
+) -> None:
+    """Test credentials Aliyun rejects, or cannot be tried, are not stored."""
+    entry = _email_entry(hass)
+    account = _running_account(hass, entry, [PRO_ULTRA])
+    account.async_check_aliyun_credentials.side_effect = failure
+
+    result = await entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_ALIYUN_CLOUD_KEY: "test-aliyun-key",
+            CONF_ALIYUN_CLOUD_SECRET: "test-wrong-secret",
+        },
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.FORM
+    assert result["errors"] == errors
+    assert CONF_ALIYUN_CLOUD_KEY not in entry.data
+    mock_setup_entry.assert_not_awaited()
+
+
+async def test_reconfigure_without_pro_ultra_leaves_the_fields_optional(
+    hass: HomeAssistant, enable_custom_integrations, mock_setup_entry
+) -> None:
+    """Test an Account without a Scooper Pro Ultra can save blank credentials."""
+    entry = _email_entry(hass)
+    account = _running_account(
+        hass,
+        entry,
+        [{"id": "dev1", "deviceName": "Litter Box", "deviceType": "LITTER_BOX_599"}],
+    )
+
+    result = await entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["reason"] == "reconfigure_successful"
+    account.async_check_aliyun_credentials.assert_not_awaited()
+    assert CONF_ALIYUN_CLOUD_KEY not in entry.data
+    assert CONF_ALIYUN_CLOUD_SECRET not in entry.data
+
+
+async def test_reconfigure_of_an_entry_not_loaded_signs_in_and_stores_untried(
+    hass: HomeAssistant, enable_custom_integrations, mock_account, mock_setup_entry
+) -> None:
+    """Test an entry that is not running signs in to list Devices and skips the check."""
+    mock_account.return_value.token = "test-token"
+    mock_account.return_value.get_devices = AsyncMock(return_value=[PRO_ULTRA])
+    mock_account.return_value.async_check_aliyun_credentials = AsyncMock()
+    entry = _email_entry(hass)
+
+    result = await entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_ALIYUN_CLOUD_KEY: "test-aliyun-key",
+            CONF_ALIYUN_CLOUD_SECRET: "test-aliyun-secret",
+        },
+    )
+
+    assert result["reason"] == "reconfigure_successful"
+    assert mock_account.call_args.args[1][CONF_EMAIL] == "cat@example.com"
+    mock_account.return_value.async_check_auth.assert_awaited_once()
+    mock_account.return_value.async_check_aliyun_credentials.assert_not_awaited()
     assert entry.data[CONF_ALIYUN_CLOUD_KEY] == "test-aliyun-key"
     assert entry.data[CONF_ALIYUN_CLOUD_SECRET] == "test-aliyun-secret"

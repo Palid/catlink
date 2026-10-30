@@ -878,6 +878,78 @@ class TestAccountAliyunChannel:
         assert "SECRETAUTHCODE" not in caplog.text
         assert "<redacted>" in caplog.text
 
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_aliyun_credential_check_opens_a_throwaway_session(
+        self, hass, account_config, mock_http_session
+    ) -> None:
+        """Test the check opens and drops its own channel with the given credentials."""
+        account = Account(hass, {**account_config, **ALIYUN_CREDENTIALS})
+        account.request = AsyncMock(return_value={"data": "AUTHCODE1"})
+
+        with patch(
+            "custom_components.catlink.modules.account.AliyunChannel"
+        ) as channel_cls:
+            channel = channel_cls.return_value
+            channel.async_open = AsyncMock()
+            channel.async_close = AsyncMock()
+            await account.async_check_aliyun_credentials(
+                "test-new-key", "test-new-secret"
+            )
+
+        args = channel_cls.call_args
+        assert args.args[2] == "CN"
+        assert await args.args[3]() == "AUTHCODE1"
+        assert args.kwargs == {
+            "app_key": "test-new-key",
+            "app_secret": "test-new-secret",
+        }
+        channel.async_open.assert_awaited_once()
+        channel.async_close.assert_awaited_once()
+        assert account._aliyun is None  # noqa: SLF001
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_aliyun_credential_check_drops_a_rejected_session(
+        self, account
+    ) -> None:
+        """Test rejected credentials propagate and the throwaway session is still dropped."""
+        from custom_components.catlink.modules.aliyun_channel import AliyunAuthFailed
+
+        account.request = AsyncMock(return_value={"data": "AUTHCODE1"})
+
+        with patch(
+            "custom_components.catlink.modules.account.AliyunChannel"
+        ) as channel_cls:
+            channel = channel_cls.return_value
+            channel.async_open = AsyncMock(side_effect=AliyunAuthFailed("rejected"))
+            channel.async_close = AsyncMock()
+            with pytest.raises(AliyunAuthFailed):
+                await account.async_check_aliyun_credentials(
+                    "test-new-key", "test-wrong-secret"
+                )
+
+        channel.async_close.assert_awaited_once()
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_aliyun_credential_check_without_auth_code_fails_the_request(
+        self, account
+    ) -> None:
+        """Test a CatLink Cloud with no auth code is not taken for rejected credentials."""
+        from custom_components.catlink.modules.aliyun_channel import (
+            AliyunRequestFailed,
+        )
+
+        account.request = AsyncMock(return_value={"returnCode": 1002})
+
+        with patch(
+            "custom_components.catlink.modules.account.AliyunChannel"
+        ) as channel_cls:
+            with pytest.raises(AliyunRequestFailed, match="no authorisation code"):
+                await account.async_check_aliyun_credentials(
+                    "test-new-key", "test-new-secret"
+                )
+
+        channel_cls.assert_not_called()
+
 
 class TestAccountEvictionRecovery:
     """Tests for the single-place Eviction recovery in request()."""
