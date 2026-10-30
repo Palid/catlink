@@ -22,6 +22,8 @@ from ..const import (
     _LOGGER,
     ACCOUNT_ID_PATH,
     CONF_ACCOUNT_ID,
+    CONF_ALIYUN_CLOUD_KEY,
+    CONF_ALIYUN_CLOUD_SECRET,
     CONF_API_BASE,
     CONF_CLIENT_SERVER,
     CONF_COUNTRY_CODE,
@@ -38,6 +40,9 @@ from ..const import (
     SIGN_KEY,
 )
 from ..helpers import Helper, account_uid, format_api_error
+from .aliyun_channel import AliyunAuthFailed, AliyunChannel
+
+API_ALIYUN_AUTH_CODE = "token/user/auth/aliLive/authCode"
 
 _SENSITIVE_LOG_KEYS = frozenset({"token", "email", "mobile", "phone", "password"})
 
@@ -69,6 +74,7 @@ class Account:
         self._config = config
         self.hass = hass
         self.http = aiohttp_client.async_create_clientsession(hass, auto_cleanup=False)
+        self._aliyun: AliyunChannel | None = None
         self._eviction_times: list[datetime.datetime] = []
         self._eviction_repair_active = False
 
@@ -154,6 +160,7 @@ class Account:
             },
         }
         kws.update(kwargs)
+        redact_response = kws.pop("_redact_response", False)
         if pms is None:
             pms = {}
         signed = dict(pms)
@@ -172,9 +179,12 @@ class Account:
             req = await self.http.request(method, url, **kws)
             result = await req.json() or {}
             if _LOGGER.isEnabledFor(logging.DEBUG):
-                _LOGGER.debug(
-                    "API response %s %s: %s", method, api, _redact_for_log(result)
-                )
+                if redact_response:
+                    _LOGGER.debug("API response %s %s: <redacted>", method, api)
+                else:
+                    _LOGGER.debug(
+                        "API response %s %s: %s", method, api, _redact_for_log(result)
+                    )
 
             if result.get("returnCode") == 1002 and not retried:
                 self._note_eviction()
@@ -394,6 +404,47 @@ class Account:
             params["timezoneId"] = timezone_id
         rsp = await self.request(api, params)
         return rsp.get("data") or {}
+
+    async def async_aliyun_channel(self) -> AliyunChannel:
+        """Return the Aliyun Channel, opening it lazily on first request."""
+        if self._aliyun is None:
+            app_key = self.get_config(CONF_ALIYUN_CLOUD_KEY)
+            app_secret = self.get_config(CONF_ALIYUN_CLOUD_SECRET)
+            if not app_key or not app_secret:
+                raise AliyunAuthFailed("Aliyun credentials are not configured")
+            self._aliyun = AliyunChannel(
+                self.hass,
+                self.http,
+                self._aliyun_country(),
+                self._async_aliyun_auth_code,
+                app_key=app_key,
+                app_secret=app_secret,
+            )
+        return self._aliyun
+
+    async def _async_aliyun_auth_code(self) -> str:
+        """Fetch a fresh Aliyun authorisation code from the CatLink Cloud.
+
+        The code arrives as a bare ``data`` string, so the response is kept out
+        of the shared debug line rather than logged in clear.
+        """
+        rsp = await self.request(
+            API_ALIYUN_AUTH_CODE, {}, "POST", _redact_response=True
+        )
+        code = rsp.get("data")
+        if not code:
+            _LOGGER.error("Aliyun auth code request failed for %s", self.phone)
+            return ""
+        return code
+
+    def _aliyun_country(self) -> str:
+        """Derive the two-letter Aliyun country from the CatLink Cloud host."""
+        base = self.get_config(CONF_API_BASE) or DEFAULT_API_BASE
+        if "sgp" in base:
+            return "SG"
+        if "usa" in base:
+            return "US"
+        return "CN"
 
     @staticmethod
     def params_sign(pms: dict) -> str:

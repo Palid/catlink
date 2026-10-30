@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, patch
 from custom_components.catlink.config_flow import _device_label
 from custom_components.catlink.const import (
     CONF_ACCOUNT_ID,
+    CONF_ALIYUN_CLOUD_KEY,
+    CONF_ALIYUN_CLOUD_SECRET,
     CONF_API_BASE,
     CONF_CLIENT_SERVER,
     CONF_COUNTRY_CODE,
@@ -15,11 +17,13 @@ from custom_components.catlink.const import (
     CONF_SWITCH_IDENTIFIER,
     CONF_UPDATE_INTERVAL,
     DOMAIN,
+    ERROR_ALIYUN_REQUIRED,
     ERROR_INVALID_AUTH,
 )
 from custom_components.catlink.helpers import RegionDiscovery
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+import voluptuous as vol
 
 from homeassistant import data_entry_flow
 from homeassistant.config_entries import SOURCE_REAUTH, SOURCE_USER
@@ -906,3 +910,231 @@ async def test_reauth_discovers_on_the_stored_base(
     assert (
         mock_disc.call_args.kwargs["api_base"] == "https://app-sgp.catlinks.cn/api/"
     )
+
+
+PRO_ULTRA = {
+    "id": "dev-ultra",
+    "deviceName": "ScooperPROUltra",
+    "model": "ScooperPROUltra",
+    "deviceType": "VISUAL_PRO_ULTRA",
+}
+
+
+def _schema_defaults(result: dict) -> dict:
+    """Return the prefilled value of every form field that has one."""
+    return {
+        str(key): key.default()
+        for key in result["data_schema"].schema
+        if key.default is not vol.UNDEFINED
+    }
+
+
+async def test_setup_without_pro_ultra_stores_no_aliyun_credentials(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test an Account without a Scooper Pro Ultra needs no Aliyun credentials."""
+    mock_account.return_value.uid = "acc-1"
+    mock_account.return_value.get_devices = AsyncMock(
+        return_value=[
+            {
+                "id": "dev1",
+                "deviceName": "Litter Box",
+                "model": "LB599",
+                "deviceType": "LITTER_BOX_599",
+            }
+        ]
+    )
+
+    result = await _pick_sign_in_method(hass, "email")
+    assert CONF_ALIYUN_CLOUD_KEY in result["data_schema"].schema
+    assert CONF_ALIYUN_CLOUD_SECRET in result["data_schema"].schema
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_EMAIL: "cat@example.com", "password": "testpass"},
+    )
+    assert result["step_id"] == "discovery"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_DEVICE_IDS: ["dev1"], CONF_UPDATE_INTERVAL: 60},
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert CONF_ALIYUN_CLOUD_KEY not in result["data"]
+    assert CONF_ALIYUN_CLOUD_SECRET not in result["data"]
+
+
+async def test_setup_with_pro_ultra_requires_aliyun_credentials(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test an Account owning a Scooper Pro Ultra cannot finish without them."""
+    mock_account.return_value.uid = "acc-1"
+    mock_account.return_value.get_devices = AsyncMock(return_value=[PRO_ULTRA])
+
+    result = await _pick_sign_in_method(hass, "email")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_EMAIL: "cat@example.com",
+            "password": "testpass",
+            CONF_ALIYUN_CLOUD_KEY: "  ",
+        },
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.FORM
+    assert result["step_id"] == "email"
+    assert result["errors"] == {CONF_ALIYUN_CLOUD_KEY: ERROR_ALIYUN_REQUIRED}
+    assert not hass.config_entries.async_entries(DOMAIN)
+
+
+async def test_setup_with_pro_ultra_stores_aliyun_credentials(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test the Aliyun credentials given for a Scooper Pro Ultra land in the entry."""
+    mock_account.return_value.uid = "acc-1"
+    mock_account.return_value.get_devices = AsyncMock(return_value=[PRO_ULTRA])
+
+    result = await _pick_sign_in_method(hass, "phone")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_PHONE: "+8613812345678",
+            "password": "testpass",
+            CONF_ALIYUN_CLOUD_KEY: " test-aliyun-key ",
+            CONF_ALIYUN_CLOUD_SECRET: "test-aliyun-secret",
+        },
+    )
+    assert result["step_id"] == "discovery"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_DEVICE_IDS: ["dev-ultra"], CONF_UPDATE_INTERVAL: 60},
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_ALIYUN_CLOUD_KEY] == "test-aliyun-key"
+    assert result["data"][CONF_ALIYUN_CLOUD_SECRET] == "test-aliyun-secret"
+
+
+async def test_reauth_adds_aliyun_credentials_for_pro_ultra(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test re-authentication offers the Aliyun fields and stores them."""
+    mock_account.return_value.uid = "acc-1"
+    mock_account.return_value.get_devices = AsyncMock(return_value=[PRO_ULTRA])
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_EMAIL: "cat@example.com",
+            CONF_ACCOUNT_ID: "acc-1",
+            CONF_API_BASE: "https://app.catlinks.cn/api/",
+            "password": "oldpass",
+        },
+        unique_id="acc-1",
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_REAUTH, "entry_id": entry.entry_id},
+        data=entry.data,
+    )
+    assert CONF_ALIYUN_CLOUD_KEY in result["data_schema"].schema
+    assert CONF_ALIYUN_CLOUD_SECRET in result["data_schema"].schema
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_EMAIL: "cat@example.com", "password": "newpass"},
+    )
+    assert result["type"] == data_entry_flow.FlowResultType.FORM
+    assert result["errors"] == {CONF_ALIYUN_CLOUD_KEY: ERROR_ALIYUN_REQUIRED}
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_EMAIL: "cat@example.com",
+            "password": "newpass",
+            CONF_ALIYUN_CLOUD_KEY: "test-aliyun-key",
+            CONF_ALIYUN_CLOUD_SECRET: "test-aliyun-secret",
+        },
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    assert entry.data[CONF_ALIYUN_CLOUD_KEY] == "test-aliyun-key"
+    assert entry.data[CONF_ALIYUN_CLOUD_SECRET] == "test-aliyun-secret"
+
+
+async def test_reauth_prefills_the_key_and_keeps_a_blank_secret(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test re-authentication never shows the secret and keeps it when left blank."""
+    mock_account.return_value.uid = "acc-1"
+    mock_account.return_value.get_devices = AsyncMock(return_value=[PRO_ULTRA])
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_EMAIL: "cat@example.com",
+            CONF_ACCOUNT_ID: "acc-1",
+            CONF_API_BASE: "https://app.catlinks.cn/api/",
+            "password": "oldpass",
+            CONF_ALIYUN_CLOUD_KEY: "test-aliyun-key",
+            CONF_ALIYUN_CLOUD_SECRET: "test-aliyun-secret",
+        },
+        unique_id="acc-1",
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_REAUTH, "entry_id": entry.entry_id},
+        data=entry.data,
+    )
+    defaults = _schema_defaults(result)
+    assert defaults[CONF_ALIYUN_CLOUD_KEY] == "test-aliyun-key"
+    assert CONF_ALIYUN_CLOUD_SECRET not in defaults
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_EMAIL: "cat@example.com", "password": "newpass"},
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    assert entry.data["password"] == "newpass"
+    assert entry.data[CONF_ALIYUN_CLOUD_KEY] == "test-aliyun-key"
+    assert entry.data[CONF_ALIYUN_CLOUD_SECRET] == "test-aliyun-secret"
+
+
+async def test_switch_identifier_keeps_the_aliyun_credentials(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test moving an entry to a new Account Identifier keeps its Aliyun credentials."""
+    mock_account.return_value.uid = "acc-1"
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_PHONE_IAC: "86",
+            CONF_PHONE: "13812345678",
+            CONF_ACCOUNT_ID: "acc-1",
+            CONF_API_BASE: "https://app.catlinks.cn/api/",
+            "password": "oldpass",
+            CONF_ALIYUN_CLOUD_KEY: "test-aliyun-key",
+            CONF_ALIYUN_CLOUD_SECRET: "test-aliyun-secret",
+        },
+        unique_id="acc-1",
+    )
+    entry.add_to_hass(hass)
+
+    result = await _pick_sign_in_method(hass, "email")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_EMAIL: "cat@example.com", "password": "testpass"},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_SWITCH_IDENTIFIER: True}
+    )
+
+    assert result["reason"] == "identifier_switched"
+    assert entry.data[CONF_EMAIL] == "cat@example.com"
+    assert entry.data[CONF_ALIYUN_CLOUD_KEY] == "test-aliyun-key"
+    assert entry.data[CONF_ALIYUN_CLOUD_SECRET] == "test-aliyun-secret"

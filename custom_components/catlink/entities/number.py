@@ -18,6 +18,11 @@ class CatlinkNumberEntity(CatlinkEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the current value."""
+        fun = self._option.get("async_set")
+        if callable(fun):
+            ret = await fun(value, entity=self)
+            await self._async_after_action(bool(ret), self._option.get("delay_update"))
+            return
         if hasattr(self._device, self._name):
             setattr(self._device, self._name, int(value))
             self.async_write_ha_state()
