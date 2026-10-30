@@ -68,8 +68,8 @@ class TestDeviceLabel:
         dat = {"deviceType": "UNKNOWN"}
         assert _device_label(dat, True) == "Unknown (UNKNOWN) - Supported"
 
-    def test_device_label_pro_ultra_third_state(self) -> None:
-        """Test the Scooper Pro Ultra gets its own support label, not Supported."""
+    def test_device_label_pro_ultra_names_aliyun_credentials(self) -> None:
+        """Test the Scooper Pro Ultra label says it needs the Aliyun credentials."""
         dat = {
             "deviceName": "ScooperPROUltra",
             "model": "ScooperPROUltra",
@@ -77,7 +77,7 @@ class TestDeviceLabel:
         }
         assert _device_label(dat, True) == (
             "ScooperPROUltra (VISUAL_PRO_ULTRA) - "
-            "Settings supported; live status and cleaning pending"
+            "Supported; needs the Aliyun credentials"
         )
 
 
