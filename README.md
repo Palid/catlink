@@ -222,6 +222,8 @@ Just use ConfigFlow. Enter your phonenumber (eg. +493034994004) and password. <b
 That's it. <br>
 It will automatically discover your Region, Cats & Devices.
 
+If your Account owns a Scooper Pro Ultra, the sign-in form also requires the Aliyun app key and secret: the Aliyun Channel needs them for live status and cleaning, and this integration does not ship them. Leave those fields blank for any other Account. When an entry's Scooper Pro Ultra cannot open the Aliyun Channel, Home Assistant asks you to re-authenticate, and that form takes the credentials too.
+
 ## One Session per Account
 
 The CatLink Cloud allows one Session per Account. Signing in anywhere starts a new Session and ends the previous one, an Eviction. When you sign Home Assistant in on the same Account you use on your phone, each poll reclaims the Session and evicts the phone app, while opening the phone app evicts Home Assistant. Neither side keeps the Session for long.

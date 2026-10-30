@@ -21,10 +21,16 @@ from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
 )
 
 from .const import (
+    ALIYUN_CHANNEL_DEVICE_TYPES,
     CONF_ACCOUNT_ID,
+    CONF_ALIYUN_CLOUD_KEY,
+    CONF_ALIYUN_CLOUD_SECRET,
     CONF_API_BASE,
     CONF_CLIENT_SERVER,
     CONF_COUNTRY_CODE,
@@ -36,6 +42,7 @@ from .const import (
     CONF_UPDATE_INTERVAL,
     DEVICE_SUPPORT_LABELS,
     DOMAIN,
+    ERROR_ALIYUN_REQUIRED,
     ERROR_INVALID_AUTH,
     SUPPORTED_DEVICE_TYPES,
 )
@@ -62,6 +69,37 @@ def _account_identifier(data: Mapping[str, Any]) -> str:
     if email:
         return email
     return f"+{data.get(CONF_PHONE_IAC, '')}{data.get(CONF_PHONE, '')}"
+
+
+def _aliyun_fields(stored: Mapping[str, Any]) -> dict:
+    """Build the optional Aliyun credential fields, prefilling only the key."""
+    return {
+        vol.Optional(
+            CONF_ALIYUN_CLOUD_KEY, default=stored.get(CONF_ALIYUN_CLOUD_KEY, "")
+        ): str,
+        vol.Optional(CONF_ALIYUN_CLOUD_SECRET): TextSelector(
+            TextSelectorConfig(type=TextSelectorType.PASSWORD)
+        ),
+    }
+
+
+def _aliyun_credentials(
+    user_input: Mapping[str, Any], stored: Mapping[str, Any]
+) -> dict[str, str]:
+    """Return the Aliyun credentials typed in; a blank field keeps the stored value."""
+    credentials = {}
+    for key in (CONF_ALIYUN_CLOUD_KEY, CONF_ALIYUN_CLOUD_SECRET):
+        value = (user_input.get(key) or "").strip() or stored.get(key)
+        if value:
+            credentials[key] = value
+    return credentials
+
+
+def _lacks_aliyun_credentials(config: Mapping[str, Any], devices: list[dict]) -> bool:
+    """Return whether a Device needs the Aliyun Channel but credentials are missing."""
+    if config.get(CONF_ALIYUN_CLOUD_KEY) and config.get(CONF_ALIYUN_CLOUD_SECRET):
+        return False
+    return any(dat.get("deviceType") in ALIYUN_CHANNEL_DEVICE_TYPES for dat in devices)
 
 
 class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -112,12 +150,15 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
             email = user_input[CONF_EMAIL].strip()
             password = user_input[CONF_PASSWORD]
 
-            stored_base = None
+            stored: Mapping[str, Any] = {}
             if self.source == SOURCE_REAUTH:
-                stored_base = self._get_reauth_entry().data.get(CONF_API_BASE)
+                stored = self._get_reauth_entry().data
 
             discovery = await discover_region(
-                self.hass, password=password, email=email, api_base=stored_base
+                self.hass,
+                password=password,
+                email=email,
+                api_base=stored.get(CONF_API_BASE),
             )
             if discovery.api_base is None:
                 errors["base"] = ERROR_INVALID_AUTH
@@ -133,7 +174,11 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
                     config[CONF_CLIENT_SERVER] = discovery.client_server
                 if discovery.country_code is not None:
                     config[CONF_COUNTRY_CODE] = discovery.country_code
-                return await self._async_signed_in(config, email)
+                config.update(_aliyun_credentials(user_input, stored))
+                result = await self._async_signed_in(config, email)
+                if result is not None:
+                    return result
+                errors[CONF_ALIYUN_CLOUD_KEY] = ERROR_ALIYUN_REQUIRED
 
         reauth_entry = (
             self._get_reauth_entry() if self.source == SOURCE_REAUTH else None
@@ -144,6 +189,7 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
             {
                 vol.Required(CONF_EMAIL, default=default_email): str,
                 vol.Required(CONF_PASSWORD): str,
+                **_aliyun_fields(reauth_entry.data if reauth_entry else {}),
             }
         )
 
@@ -164,11 +210,15 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
             password = user_input[CONF_PASSWORD]
 
             phone_iac, phone_number = parse_phone_number(phone_raw)
-            stored_base = None
+            stored: Mapping[str, Any] = {}
             if self.source == SOURCE_REAUTH:
-                stored_base = self._get_reauth_entry().data.get(CONF_API_BASE)
+                stored = self._get_reauth_entry().data
             discovery = await discover_region(
-                self.hass, phone_iac, phone_number, password, api_base=stored_base
+                self.hass,
+                phone_iac,
+                phone_number,
+                password,
+                api_base=stored.get(CONF_API_BASE),
             )
             if discovery.api_base is None:
                 errors["base"] = ERROR_INVALID_AUTH
@@ -185,9 +235,13 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
                     config[CONF_CLIENT_SERVER] = discovery.client_server
                 if discovery.country_code is not None:
                     config[CONF_COUNTRY_CODE] = discovery.country_code
-                return await self._async_signed_in(
+                config.update(_aliyun_credentials(user_input, stored))
+                result = await self._async_signed_in(
                     config, f"+{phone_iac}{phone_number}"
                 )
+                if result is not None:
+                    return result
+                errors[CONF_ALIYUN_CLOUD_KEY] = ERROR_ALIYUN_REQUIRED
 
         reauth_entry = (
             self._get_reauth_entry() if self.source == SOURCE_REAUTH else None
@@ -202,6 +256,7 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
             {
                 vol.Required(CONF_PHONE, default=default_phone): str,
                 vol.Required(CONF_PASSWORD): str,
+                **_aliyun_fields(reauth_entry.data if reauth_entry else {}),
             }
         )
 
@@ -213,8 +268,12 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def _async_signed_in(
         self, config: dict[str, Any], title: str
-    ) -> ConfigFlowResult:
-        """Settle the entry this sign-in belongs to, then discover its devices."""
+    ) -> ConfigFlowResult | None:
+        """Settle the entry this sign-in belongs to, then discover its devices.
+
+        Returns None when the Account owns a Scooper Pro Ultra but the Aliyun
+        credentials are missing, so the caller shows its form again.
+        """
         account = Account(self.hass, config)
         await account.async_check_auth()
 
@@ -233,6 +292,8 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
                 if other is not None and other.entry_id != entry.entry_id:
                     return self.async_abort(reason="already_configured")
+            if _lacks_aliyun_credentials(config, await account.get_devices()):
+                return None
             return self.async_update_reload_and_abort(
                 entry,
                 unique_id=account.uid or entry.unique_id,
@@ -260,6 +321,8 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
             self._abort_if_unique_id_configured()
 
         devices = await account.get_devices()
+        if _lacks_aliyun_credentials(config, devices):
+            return None
         if not devices:
             return self.async_create_entry(
                 title=title,
@@ -292,7 +355,10 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._configured_entry,
                 unique_id=self._account.uid,
                 title=self._title,
-                data=self._config,
+                data={
+                    **self._config,
+                    **_aliyun_credentials(self._config, self._configured_entry.data),
+                },
                 reason="identifier_switched",
             )
 
