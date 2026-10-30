@@ -23,7 +23,7 @@ import uuid
 import aiohttp
 from homeassistant.core import HomeAssistant
 
-from ..const import _LOGGER, ALIYUN_APP_KEY, ALIYUN_APP_SECRET, ALIYUN_DOMAIN
+from ..const import _LOGGER, ALIYUN_DOMAIN
 
 REFRESH_MARGIN = 3600
 
@@ -79,7 +79,7 @@ class AliyunSessionExpired(AliyunRequestFailed):
 
 
 class AliyunAuthFailed(AliyunError):
-    """A fresh authorisation code could not be obtained or exchanged."""
+    """The channel cannot authorise: no credentials, or no usable authorisation code."""
 
 
 class AliyunChannel:
@@ -92,8 +92,8 @@ class AliyunChannel:
         country: str,
         request_auth_code: Callable[[], Awaitable[str]],
         *,
-        app_key: str = ALIYUN_APP_KEY,
-        app_secret: str = ALIYUN_APP_SECRET,
+        app_key: str,
+        app_secret: str,
     ) -> None:
         """Initialize the channel; nothing is requested until it is opened."""
         self.hass = hass

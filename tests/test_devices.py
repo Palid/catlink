@@ -1728,6 +1728,27 @@ class TestScooperProUltraAliyun:
         with pytest.raises(ConfigEntryAuthFailed):
             await device.async_clean()
 
+    async def test_write_without_aliyun_credentials_starts_reauth(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test a write with no Aliyun credentials configured starts reauth."""
+        device, channel = _pro_ultra_ready(
+            sample_pro_ultra_data,
+            mock_coordinator,
+            {
+                "RunStatus": "runStatus=0&biz=0",
+                "AbnormalState": "0",
+                "GarbageBoxStatus": "g=1&f=0",
+            },
+        )
+        mock_coordinator.account.async_aliyun_channel = AsyncMock(
+            side_effect=AliyunAuthFailed("Aliyun credentials are not configured")
+        )
+
+        with pytest.raises(ConfigEntryAuthFailed):
+            await device.async_clean()
+        channel.async_set_properties.assert_not_called()
+
     @pytest.mark.usefixtures("enable_custom_integrations")
     async def test_update_detail_reads_thing_properties(
         self, mock_coordinator, sample_pro_ultra_data, pro_ultra_thing_properties

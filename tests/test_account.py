@@ -10,6 +10,8 @@ from homeassistant.const import CONF_DEVICES, CONF_PASSWORD, CONF_TOKEN
 
 from custom_components.catlink.const import (
     CONF_ACCOUNT_ID,
+    CONF_ALIYUN_CLOUD_KEY,
+    CONF_ALIYUN_CLOUD_SECRET,
     CONF_API_BASE,
     CONF_EMAIL,
     CONF_LANGUAGE,
@@ -22,6 +24,11 @@ from custom_components.catlink.const import (
     SCAN_INTERVAL,
 )
 from custom_components.catlink.modules.account import Account, _redact_for_log
+
+ALIYUN_CREDENTIALS = {
+    CONF_ALIYUN_CLOUD_KEY: "test-aliyun-key",
+    CONF_ALIYUN_CLOUD_SECRET: "test-aliyun-secret",
+}
 
 
 @pytest.fixture
@@ -781,15 +788,53 @@ class TestAccountAliyunChannel:
         assert account._aliyun_country() == expected  # noqa: SLF001
 
     @pytest.mark.usefixtures("enable_custom_integrations")
-    async def test_aliyun_channel_is_created_once(self, account) -> None:
+    async def test_aliyun_channel_is_created_once(
+        self, hass, account_config, mock_http_session
+    ) -> None:
         """Test the channel is built lazily and the same instance is returned after."""
         from custom_components.catlink.modules.aliyun_channel import AliyunChannel
 
+        account = Account(hass, {**account_config, **ALIYUN_CREDENTIALS})
         first = await account.async_aliyun_channel()
         second = await account.async_aliyun_channel()
 
         assert isinstance(first, AliyunChannel)
         assert first is second
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_aliyun_channel_takes_the_entry_credentials(
+        self, hass, account_config, mock_http_session
+    ) -> None:
+        """Test the channel is built with the Aliyun credentials the entry holds."""
+        account = Account(hass, {**account_config, **ALIYUN_CREDENTIALS})
+
+        with patch(
+            "custom_components.catlink.modules.account.AliyunChannel"
+        ) as channel_cls:
+            await account.async_aliyun_channel()
+
+        assert channel_cls.call_args.kwargs == {
+            "app_key": "test-aliyun-key",
+            "app_secret": "test-aliyun-secret",
+        }
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    @pytest.mark.parametrize(
+        "missing", [CONF_ALIYUN_CLOUD_KEY, CONF_ALIYUN_CLOUD_SECRET]
+    )
+    async def test_aliyun_channel_without_credentials_fails_auth(
+        self, hass, account_config, mock_http_session, missing
+    ) -> None:
+        """Test a missing Aliyun credential fails auth instead of opening a channel."""
+        from custom_components.catlink.modules.aliyun_channel import AliyunAuthFailed
+
+        config = {**account_config, **ALIYUN_CREDENTIALS}
+        del config[missing]
+        account = Account(hass, config)
+
+        with pytest.raises(AliyunAuthFailed, match="not configured"):
+            await account.async_aliyun_channel()
+        assert account._aliyun is None  # noqa: SLF001
 
     @pytest.mark.usefixtures("enable_custom_integrations")
     async def test_auth_code_request_returns_data_string(self, account) -> None:

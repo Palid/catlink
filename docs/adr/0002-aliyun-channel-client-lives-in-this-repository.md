@@ -14,4 +14,4 @@ The only vendor-specific parts are the starting point, an authorisation code iss
 
 - PyMammotion (`pymammotion/aliyun/cloud_gateway.py`) is the reference when the flow misbehaves. It has been reviewed through a summary, not line by line; read it properly before implementing.
 - Mammotion-HA tells people to use a second account with the mower shared to it for cloud control. That suggests the Aliyun platform has a single-session rule of its own, separate from the CatLink Cloud's Session rule. Whether opening the Aliyun Channel from Home Assistant disturbs the phone app is an open question to settle on real hardware.
-- The vendor can rotate the embedded app key and secret in any app update, which would break the Aliyun Channel until the constants are updated. Mammotion-HA carries the same risk.
+- The vendor can rotate the embedded app key and secret in any app update, which would break the Aliyun Channel until the credentials in each config entry are updated. Mammotion-HA carries the same risk.
