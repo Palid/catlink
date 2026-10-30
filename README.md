@@ -224,6 +224,8 @@ It will automatically discover your Region, Cats & Devices.
 
 If your Account owns a Scooper Pro Ultra, the sign-in form also requires the Aliyun app key and secret: the Aliyun Channel needs them for live status and cleaning, and this integration does not ship them. Leave those fields blank for any other Account. When an entry's Scooper Pro Ultra cannot open the Aliyun Channel, Home Assistant asks you to re-authenticate, and that form takes the credentials too.
 
+You can also add or change the Aliyun credentials at any time from the integration's entry menu: Settings → Devices & services → CatLink, then the entry's three-dot menu → Reconfigure. A Scooper Pro Ultra requires them, so for an Account that owns one the form will not save without them; a blank secret keeps the stored one.
+
 ## One Session per Account
 
 The CatLink Cloud allows one Session per Account. Signing in anywhere starts a new Session and ends the previous one, an Eviction. When you sign Home Assistant in on the same Account you use on your phone, each poll reclaims the Session and evicts the phone app, while opening the phone app evicts Home Assistant. Neither side keeps the Session for long.

@@ -4,11 +4,13 @@
       "already_configured": "This CatLink Account is already configured.",
       "identifier_switched": "The existing entry now signs in with the new Account Identifier.",
       "reauth_successful": "Re-authentication successful.",
+      "reconfigure_successful": "The Aliyun credentials are saved and the entry has been reloaded.",
       "wrong_account": "That signed in to a different CatLink Account than this entry. Re-authenticate with the Account Identifier this entry already uses."
     },
     "error": {
+      "aliyun_invalid": "Aliyun rejected this app key and secret. Check both and try again.",
       "aliyun_required": "This Account owns a Scooper Pro Ultra, which is reachable only over the Aliyun Channel. Enter the Aliyun app key and secret.",
-      "cannot_connect": "Cannot connect to CatLink servers. Please check your internet connection and try again.",
+      "cannot_connect": "Cannot reach the CatLink Cloud or Aliyun. Please check your internet connection and try again.",
       "invalid_auth": "Authentication failed. Please check your credentials and try again."
     },
     "step": {
@@ -46,6 +48,18 @@
           "switch_identifier": "Switch the existing entry"
         },
         "title": "Account already configured"
+      },
+      "reconfigure": {
+        "description": "Add or change the Aliyun app key and secret this entry uses. A Scooper Pro Ultra needs them for live status and cleaning; for any other Account they can stay blank. When this entry is running, the new credentials are tried against Aliyun before they are saved.",
+        "data": {
+          "aliyun_cloud_key": "Aliyun app key",
+          "aliyun_cloud_secret": "Aliyun app secret"
+        },
+        "data_description": {
+          "aliyun_cloud_key": "Prefilled with the stored key, if there is one.",
+          "aliyun_cloud_secret": "Leave blank to keep the stored secret."
+        },
+        "title": "Aliyun credentials"
       },
       "discovery": {
         "description": "Found {total_count} device(s): {supported_count} fully supported, {unsupported_count} with limited support. Select which devices to add. Supported devices are pre-selected for quick setup.",
