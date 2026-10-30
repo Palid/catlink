@@ -1,6 +1,8 @@
 <div align="center">
-  <h2>CATLINK v2 Integration for Home Assistant</h2>
+  <h2>CatLink (New)</h2>
 </div>
+
+<p align="center">A maintained fork of <a href="https://github.com/hasscc/catlink">hasscc/catlink</a> with the Scooper Pro Ultra fully supported.</p>
 
 <div align="center">
   <img src="https://play-lh.googleusercontent.com/eHPhN_fUDhdxMK4JAvlzjB5Mh-H72crLn2U3Khk37lzolNg2CTDgZXkB5bjPiM3CDqM" alt="CatLINK Logo" width="100">
@@ -16,7 +18,7 @@
 
 <div align="right">
   <span style="margin-right: 10px; font-size: 16px; font-style: italic">Spotted the issue?</span>
-  <a href="https://github.com/hasscc/catlink/issues/new?assignees=&labels=bug%2Ctriage&template=bug_report.md&title=%5BBug%5D%3A+" target="_blank" style="text-decoration: none;"><span style="background-color: #f44b42; border: none; color: white; padding: 10px 20px; text-align: center; text-decoration: none; display: inline-block; font-size: 16px; margin: 4px 2px; cursor: pointer; border-radius: 4px;">Report a Bug</span></a>
+  <a href="https://github.com/Palid/catlink/issues/new?assignees=&labels=bug%2Ctriage&template=bug_report.md&title=%5BBug%5D%3A+" target="_blank" style="text-decoration: none;"><span style="background-color: #f44b42; border: none; color: white; padding: 10px 20px; text-align: center; text-decoration: none; display: inline-block; font-size: 16px; margin: 4px 2px; cursor: pointer; border-radius: 4px;">Report a Bug</span></a>
 </div>
 
 ---
@@ -25,26 +27,30 @@
 
 - [Features](#features)
 - [Installation](#installation)
-  - [Easy way](#easy-way)
+  - [HACS (custom repository)](#hacs-custom-repository)
   - [Manually](#manually)
 - [Supported Devices and Operations](#supported-devices-and-operations)
-  - [Scooper SE](#supported-devices-and-operations)
-  - [Scooper PRO](#supported-devices-and-operations)
-  - [PurePro Fountain](#supported-devices-and-operations)
+  - [Scooper Pro Ultra](#scooper-pro-ultra)
+  - [Other Devices](#other-devices)
 - [How to Configure?](#how-to-configure)
 - [One Session per Account](#one-session-per-account)
 - [Services (Optional)](#services-optional)
+- [Does this work without the cloud?](#does-this-work-without-the-cloud)
 - [Changelog](#changelog)
 - [How to contribute?](#how-to-contribute)
 - [Disclaimer on Using Logos](#disclaimer-on-using-logos)
 
-The CatLINK custom integration provides seamless support for integrating your CatLINK Scooper and Litterbox devices into Home Assistant. This integration allows you to monitor, control, and automate your CatLINK devices directly from your Home Assistant setup, enhancing the convenience and care of your feline friends.
+The CatLink (New) custom integration connects a CatLink Account to Home Assistant, so the litter boxes, feeders, fountains and Cats on that Account can be monitored, controlled and automated. It reaches Devices through the CatLink Cloud and, for the Scooper Pro Ultra, the Aliyun Channel.
 
 #### Features:
 
 - **Scooper/Litterbox Device Integration**: Effortlessly connect your CatLINK Scooper and Litterbox devices to Home Assistant, enabling centralized control and monitoring within your smart home environment.
 
-- **Real-Time Status Monitoring**: Track essential metrics such as work status, alarm status, weight, litter weight, cleaning times, and more. All relevant data is available in real-time, ensuring you stay informed about your pet's litterbox usage.
+- **Scooper Pro Ultra**: Live status, cleaning actions, work mode, device settings and timed-cleaning schedules. See [Scooper Pro Ultra](#scooper-pro-ultra).
+
+- **Email or phone sign-in**: Sign in with the Email or the phone number you use in the CatLink app. The region is discovered automatically.
+
+- **Status Monitoring**: Track essential metrics such as work status, alarm status, weight, litter weight, cleaning times, and more, refreshed from the cloud on the interval you choose.
 
 - **Mode Selection**: Choose between different modes of operation (Auto, Manual, Time) to customize the behavior of your CatLINK devices according to your needs and preferences.
 
@@ -60,17 +66,28 @@ The CatLINK custom integration provides seamless support for integrating your Ca
 
 # Installation:
 
-### Easy way
-[![HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?category=integration&owner=hasscc&repository=catlink)
+Requires Home Assistant 2026.2 or newer.
+
+This fork installs to the same `custom_components/catlink` folder, under the same `catlink` domain, as upstream CatLink, so only one of the two can be installed at a time. If you installed upstream CatLink through HACS, remove it in HACS before downloading this one. Config entries you already have use the same domain and are picked up by this fork.
+
+### HACS (custom repository)
+
+[![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?category=integration&owner=Palid&repository=catlink)
+
+Or add it by hand:
+
+1. In HACS, open the three-dot menu → **Custom repositories**.
+2. Add `https://github.com/Palid/catlink` with the category **Integration**.
+3. Find **CatLink (New)** in HACS, download it, and restart Home Assistant.
 
 ### Manually
 
-#### Method 1: Manually installation via Samba / SFTP
-> Download and copy `custom_components/catlink` folder to `custom_components` folder in your HomeAssistant config folder
+#### Method 1: Manual installation via Samba / SFTP
+> Download this repository and copy its `custom_components/catlink` folder to the `custom_components` folder in your Home Assistant config folder, then restart Home Assistant.
 
-#### Method 2: Onkey shell via SSH / Terminal & SSH add-on
+#### Method 2: One-line shell via SSH / Terminal & SSH add-on
 ```shell
-wget -O - https://get.hacs.vip | DOMAIN=catlink REPO_PATH=hasscc/catlink ARCHIVE_TAG=main bash -
+wget -O - https://get.hacs.vip | DOMAIN=catlink REPO_PATH=Palid/catlink ARCHIVE_TAG=main bash -
 ```
 
 #### Method 3: shell_command service
@@ -78,13 +95,44 @@ wget -O - https://get.hacs.vip | DOMAIN=catlink REPO_PATH=hasscc/catlink ARCHIVE
     ```yaml
     shell_command:
       update_catlink: |-
-        wget -O - https://get.hacs.vip | DOMAIN=catlink REPO_PATH=hasscc/catlink ARCHIVE_TAG=main bash -
+        wget -O - https://get.hacs.vip | DOMAIN=catlink REPO_PATH=Palid/catlink ARCHIVE_TAG=main bash -
     ```
 2. Restart HA core
 3. Call this [`service: shell_command.update_catlink`](https://my.home-assistant.io/redirect/developer_call_service/?service=shell_command.update_catlink) in Developer Tools
-2. Restart HA core again
+4. Restart HA core again
 
 ## Supported Devices and Operations
+
+### Scooper Pro Ultra
+
+<div align="center">
+  <img src="https://www.catlinkus.com/cdn/shop/files/ULTRA3_832ba0c1-c1b6-4ec0-ba8a-6ec5122897dd_610x610_crop_center.webp?v=1768480746" alt="Scooper Pro Ultra" width="150">
+</div>
+
+The Scooper Pro Ultra reports its live status and takes its cleaning commands only over the Aliyun Channel, Alibaba Cloud's IoT service. Its counters, schedules and some settings come from the CatLink Cloud. The config entry needs the Aliyun app key and secret for it (see [How to Configure?](#how-to-configure)).
+
+| Platform | Entities | Reached over |
+| --- | --- | --- |
+| Sensor | `status` (such as idle, cleaning, emptying, levelling, paused), `litter_balance` (%), `weight`, `wifi_signal` (dBm), `firmware` | Aliyun Channel |
+| Sensor | `litter_remaining_days`, `deodorant_countdown`, `total_clean_time`, `schedules` (the schedule list as an attribute), `about`, `error`, `last_log` | CatLink Cloud |
+| Binary sensor | `problem` (the reason as an attribute), `bin_full`, `bin_installed` | Aliyun Channel |
+| Button | `clean`, `empty`, `level`, `pause`, `resume`, `cancel` | Aliyun Channel |
+| Button | `reset_litter`, `reset_deodorant` | CatLink Cloud |
+| Select | `work_mode` (induction, manual, timing) | read over the Aliyun Channel, set over the CatLink Cloud |
+| Select | `indicator_light` and `fill_light` (off, on, auto), `litter_type` (clay, mixed) | Aliyun Channel |
+| Switch | `child_lock`, `continuous_clean`, `prompt_sounds`, `soft_stool`, `camera_sleep` | Aliyun Channel |
+| Switch | `quiet_mode`, `all_timings`, `auto_update_pet_weight` | CatLink Cloud |
+| Number | `clean_delay` (1–60 min), `full_bin_threshold` (level 1–4), `levelling_duration` (level 1–4) | Aliyun Channel |
+| Time | `quiet_start`, `quiet_end` (the quiet-mode hours) | CatLink Cloud |
+| Service | `catlink.add_timing`, `catlink.update_timing`, `catlink.remove_timing`, `catlink.toggle_timing` (see [Services](#scooper-pro-ultra-schedules)) | CatLink Cloud |
+
+Entity IDs follow the pattern `sensor.visual_pro_ultra_<last 4 of the MAC>_status`.
+
+Actions over the Aliyun Channel, and the work mode, check the live status first and are refused when there is none. `clean`, `empty` and `level` run only when the Device is idle, reports no problem and its bin is not full; `pause` works only while it runs, `resume` only while it is paused, and `cancel` in either case. The work mode and the settings reached over the Aliyun Channel can be changed only while the Device is idle.
+
+### Other Devices
+
+Other models keep upstream's behaviour:
 
 <div style="display: flex; justify-content: space-between; flex-wrap: nowrap; gap: 16px;">
 
@@ -180,19 +228,6 @@ wget -O - https://get.hacs.vip | DOMAIN=catlink REPO_PATH=hasscc/catlink ARCHIVE
     </ul>
   </div>
 
-  <div style="text-align: center; width: 33.33%;">
-    <h3>Scooper Pro Ultra (limited)</h3>
-    <img src="https://www.catlinkus.com/cdn/shop/files/ULTRA3_832ba0c1-c1b6-4ec0-ba8a-6ec5122897dd_610x610_crop_center.webp?v=1768480746" alt="Scooper Pro Ultra" width="150">
-    <h4>Operations</h4>
-    <ul style="text-align: left;">
-      <li>Litter remaining days</li>
-      <li>Deodorant countdown</li>
-      <li>Total clean time</li>
-      <li>Logs</li>
-      <li>Entities: sensor</li>
-    </ul>
-  </div>
-
 </div>
 
 #### Cats
@@ -216,15 +251,19 @@ wget -O - https://get.hacs.vip | DOMAIN=catlink REPO_PATH=hasscc/catlink ARCHIVE
 
 ### How to Configure?
 
-> ! Recommend sharing devices to another account, because you can keep only one login session, which means that you'll have to re-login to CATLINK each time your HA instance pulls the data.
+> ! Read [One Session per Account](#one-session-per-account) first: signing Home Assistant in on the Account your phone uses signs the phone app out.
 
-Just use ConfigFlow. Enter your phonenumber (eg. +493034994004) and password. <br>
-That's it. <br>
-It will automatically discover your Region, Cats & Devices.
+1. Settings → Devices & services → **Add integration** → **CatLink (New)**.
+2. Choose how you sign in to the CatLink app: **Email and password**, or **Phone number and password**. Enter a phone number in full with its country code (e.g. +447911123456).
+3. Pick the Devices to add and the refresh interval. Supported Devices are pre-selected.
 
-If your Account owns a Scooper Pro Ultra, the sign-in form also requires the Aliyun app key and secret: the Aliyun Channel needs them for live status and cleaning, and this integration does not ship them. Leave those fields blank for any other Account. When an entry's Scooper Pro Ultra cannot open the Aliyun Channel, Home Assistant asks you to re-authenticate, and that form takes the credentials too.
+The region is discovered automatically. Before signing in, the integration reads the CatLink Cloud's own country-to-server table and signs in on the server it names, trying the other regional servers only if that sign-in fails. The server it finds is stored with the entry, so re-authentication signs in once. Cats and Devices are discovered from the Account; the entry's **Configure** button changes the Devices and the refresh interval later.
 
-You can also add or change the Aliyun credentials at any time from the integration's entry menu: Settings → Devices & services → CatLink, then the entry's three-dot menu → Reconfigure. A Scooper Pro Ultra requires them, so for an Account that owns one the form will not save without them; a blank secret keeps the stored one.
+Adding the integration again for an Account that is already configured, with a different Email or phone number, offers to switch the existing entry over instead of adding a second one.
+
+The sign-in form also has two optional fields, the Aliyun app key and secret. Leave them blank unless the Account owns a Scooper Pro Ultra; for an Account that owns one the form will not save without them, because the Aliyun Channel needs them for live status and cleaning. They are the Aliyun IoT app key and secret that the CatLink Android app uses; this integration does not ship them.
+
+You can add or change the Aliyun credentials at any time from the integration's entry menu: Settings → Devices & services → CatLink (New), then the entry's three-dot menu → Reconfigure. A blank secret keeps the stored one, and while the entry is running the new pair is tried against Aliyun before it is saved. When an entry's Scooper Pro Ultra cannot open the Aliyun Channel, Home Assistant asks you to re-authenticate, and that form takes the credentials too.
 
 ## One Session per Account
 
@@ -236,7 +275,7 @@ To keep both working, give Home Assistant its own Account:
 2. In the CatLink phone app, share your Devices to that Account.
 3. Configure this integration with the dedicated Account, or re-authenticate an existing entry to switch it over.
 
-If Home Assistant detects repeated Evictions on one Account, it raises a repair pointing here so you can move to a dedicated Account.
+If Home Assistant detects repeated Evictions on one Account (three within an hour), it raises a repair issue pointing here so you can move to a dedicated Account; the issue clears after a day without an Eviction. If the Session cannot be reclaimed at all, Home Assistant asks you to re-authenticate.
 
 ## Services (Optional)
 
@@ -270,7 +309,19 @@ data:
     deviceId: "1234567890"
 ```
 
-### Does this work without the cloud?
+#### Scooper Pro Ultra schedules
+
+`catlink.add_timing`, `catlink.update_timing`, `catlink.remove_timing` and `catlink.toggle_timing` manage a Scooper Pro Ultra's timed cleanings. Target any sensor entity of that Device; the `schedules` sensor lists the current schedules, with their ids, in its `schedules` attribute. Times are `HH:mm`.
+
+```yaml
+service: catlink.add_timing
+target:
+  entity_id: sensor.visual_pro_ultra_xxxx_schedules
+data:
+  time: "09:30"
+```
+
+## Does this work without the cloud?
 
 Short answer: **no.** This integration reaches your Devices only through the
 CatLink Cloud and the Aliyun Channel; there is no Local Control (state and
@@ -287,7 +338,7 @@ polling) are in [`docs/local-control-spike.md`](docs/local-control-spike.md).
 
 ## Changelog
 
-See `CHANGELOG.md` for release notes.
+See [`CHANGELOG.md`](CHANGELOG.md) for release notes.
 
 ### How to contribute?
 
