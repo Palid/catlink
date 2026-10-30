@@ -6,6 +6,7 @@ from .sensor import CatlinkSensorEntity
 from .select import CatlinkSelectEntity
 from .switch import CatlinkSwitchEntity
 from .button import CatlinkButtonEntity
+from .time import CatlinkTimeEntity
 
 __all__ = [
     "CatlinkEntity",
@@ -15,4 +16,5 @@ __all__ = [
     "CatlinkSelectEntity",
     "CatlinkSwitchEntity",
     "CatlinkButtonEntity",
+    "CatlinkTimeEntity",
 ]

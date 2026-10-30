@@ -1,5 +1,6 @@
 """Tests for CatLink device classes."""
 
+from datetime import time
 from unittest.mock import AsyncMock, MagicMock
 
 from custom_components.catlink.devices.base import Device
@@ -81,6 +82,69 @@ def sample_pro_ultra_data():
         "model": "ScooperPROUltra",
         "deviceName": "ScooperPROUltra",
         "deviceType": "VISUAL_PRO_ULTRA",
+    }
+
+
+@pytest.fixture
+def pro_ultra_brief_info_body():
+    """Recorded briefInfo deviceInfo body (2026-09-19 live capture, redacted).
+
+    quietEnable/quietTimes come back null on a device that has never had quiet
+    mode configured; they must not render as the app's 23:00/07:00 defaults.
+    """
+    return {
+        "allTimingToggle": True,
+        "autoUpdatePetWeight": True,
+        "catLitterType": None,
+        "currentMessage": None,
+        "defaultStatus": None,
+        "deodorantCountdown": 30,
+        "deviceId": "ultra1",
+        "deviceModel": "00",
+        "deviceName": "ScooperPROUltra",
+        "deviceType": None,
+        "litterCountdown": 14,
+        "mac": "44:72:AC:0D:89:37",
+        "master": 1,
+        "qcFlag": False,
+        "quietEnable": None,
+        "quietTimes": None,
+        "secretLock": False,
+        "snEnable": True,
+        "timezoneId": "Europe/Oslo",
+        "totalCleanTimes": "1",
+    }
+
+
+@pytest.fixture
+def pro_ultra_timings_body():
+    """Recorded timings list body (2026-09-19 live capture, redacted).
+
+    All four schedules have status 0, which means enabled.
+    """
+    return [
+        {"id": "t1", "repeat": None, "status": 0, "timingHour": "08", "timingMin": "00"},
+        {"id": "t2", "repeat": None, "status": 0, "timingHour": "12", "timingMin": "00"},
+        {"id": "t3", "repeat": None, "status": 0, "timingHour": "16", "timingMin": "00"},
+        {"id": "t4", "repeat": None, "status": 0, "timingHour": "20", "timingMin": "00"},
+    ]
+
+
+@pytest.fixture
+def pro_ultra_about_body():
+    """Recorded aboutDevice info body (2026-09-19 live capture, redacted).
+
+    firmwareVersion/sn are null and wifiSingle is not scalar: they are read from
+    the Aliyun Channel by the app and are deferred to issue #8.
+    """
+    return {
+        "careEnd": 1790000000,
+        "careStart": 1758000000,
+        "deviceName": "ScooperPROUltra",
+        "firmwareVersion": None,
+        "mac": "44:72:AC:0D:89:37",
+        "model": "Standard",
+        "sn": None,
     }
 
 
@@ -828,12 +892,13 @@ class TestScooperDeviceAsyncMethods:
 class TestScooperProUltraDevice:
     """Tests for ScooperProUltraDevice."""
 
-    def test_name_appends_limited_support(
+    def test_name_has_no_limited_support_suffix(
         self, mock_coordinator, sample_pro_ultra_data
     ) -> None:
-        """Test ScooperProUltraDevice name appends limited support suffix."""
+        """Test ScooperProUltraDevice name no longer appends a support suffix."""
         device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
-        assert device.name.endswith(" (Limited Support)")
+        assert device.name == "ScooperPROUltra"
+        assert not device.name.endswith(" (Limited Support)")
 
     @pytest.mark.usefixtures("enable_custom_integrations")
     async def test_update_device_detail_brief_info(
@@ -864,6 +929,23 @@ class TestScooperProUltraDevice:
         )
 
     @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_update_device_detail_keeps_null_quiet_fields(
+        self, mock_coordinator, sample_pro_ultra_data, pro_ultra_brief_info_body
+    ) -> None:
+        """Test the recorded briefInfo body (quietTimes null) does not wipe detail."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        mock_coordinator.account.request = AsyncMock(
+            return_value={"data": {"deviceInfo": pro_ultra_brief_info_body}}
+        )
+
+        result = await device.update_device_detail()
+
+        assert result["litterCountdown"] == 14
+        assert result["quietEnable"] is None
+        assert result["quietTimes"] is None
+        assert result["autoUpdatePetWeight"] is True
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
     async def test_update_logs_timeline_v2(
         self, mock_coordinator, sample_pro_ultra_data
     ) -> None:
@@ -886,6 +968,357 @@ class TestScooperProUltraDevice:
             mock_coordinator.account.request.call_args[0][0]
             == "token/litterbox/stats/log/timeline/v2"
         )
+
+    def test_quiet_mode_from_brief_info(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test quiet_mode reads quietEnable, treating null as off."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        device.detail = {"quietEnable": True}
+        assert device.quiet_mode is True
+        device.detail = {"quietEnable": None}
+        assert device.quiet_mode is False
+
+    def test_quiet_hours_from_brief_info(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test quiet_start/quiet_end split quietTimes on the first hyphen."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        device.detail = {"quietTimes": "23:00-07:00"}
+        assert device.quiet_start == time(23, 0)
+        assert device.quiet_end == time(7, 0)
+
+    def test_quiet_hours_none_when_not_configured(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test quiet hours are unknown, not the app defaults, when quietTimes is null."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        device.detail = {"quietTimes": None}
+        assert device.quiet_start is None
+        assert device.quiet_end is None
+
+    def test_all_timings_and_auto_update_from_brief_info(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test all_timings and auto_update_pet_weight read their briefInfo flags."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        device.detail = {"allTimingToggle": True, "autoUpdatePetWeight": False}
+        assert device.all_timings is True
+        assert device.auto_update_pet_weight is False
+
+    def test_schedules_from_timings_fixture(
+        self, mock_coordinator, sample_pro_ultra_data, pro_ultra_timings_body
+    ) -> None:
+        """Test schedules count and attribute derive from the recorded timings list."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        device._timings = pro_ultra_timings_body  # noqa: SLF001
+        assert device.schedules == 4
+        assert device.schedules_attrs()["schedules"] == pro_ultra_timings_body
+
+    def test_about_from_about_device_fixture(
+        self, mock_coordinator, sample_pro_ultra_data, pro_ultra_about_body
+    ) -> None:
+        """Test about state and attributes derive from the recorded aboutDevice body."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        device._about = pro_ultra_about_body  # noqa: SLF001
+        assert device.about == "Standard"
+        attrs = device.about_attrs()
+        assert attrs["model"] == "Standard"
+        assert attrs["care_start"] == 1758000000
+        assert attrs["care_end"] == 1790000000
+        assert "firmware_version" not in attrs
+        assert "wifi_signal" not in attrs
+
+    def test_hass_select_is_empty(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test the inherited work-mode select is not exposed (deferred to #8)."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        assert device.hass_select == {}
+
+    def test_hass_switch_structure(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test hass_switch exposes quiet mode, all timings and cat-weight auto-update."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        switches = device.hass_switch
+        assert set(switches) == {"quiet_mode", "all_timings", "auto_update_pet_weight"}
+        assert "urine_identification" not in switches
+
+    def test_hass_button_and_time_structure(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test hass_button exposes the resets and hass_time the quiet window."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        assert set(device.hass_button) == {"reset_litter", "reset_deodorant"}
+        assert set(device.hass_time) == {"quiet_start", "quiet_end"}
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_set_quiet_mode_sends_expected_params(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test async_set_quiet_mode posts quietMode with enable and times."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        device.detail = {"quietEnable": False, "quietTimes": "23:00-07:00"}
+        mock_coordinator.account.request = AsyncMock(return_value={"returnCode": 0})
+        device.update_device_detail = AsyncMock(return_value={})
+
+        result = await device.async_set_quiet_mode(True)
+
+        assert result is not False
+        call_args = mock_coordinator.account.request.call_args
+        assert call_args[0][0] == "token/visualScooper/quietMode"
+        assert call_args[0][1]["deviceId"] == "ultra1"
+        assert call_args[0][1]["enable"] == "true"
+        assert call_args[0][1]["times"] == "23:00-07:00"
+        assert call_args[0][2] == "POST"
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_set_quiet_mode_error_surfaces_without_changing_state(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test a cloud error returns False, records the error and leaves detail intact."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        device.detail = {"quietEnable": False, "quietTimes": "23:00-07:00"}
+        mock_coordinator.account.request = AsyncMock(
+            return_value={"returnCode": 1, "msg": "boom"}
+        )
+        device.update_device_detail = AsyncMock(return_value={})
+
+        result = await device.async_set_quiet_mode(True)
+
+        assert result is False
+        assert device._action_error is not None  # noqa: SLF001
+        assert device.detail == {"quietEnable": False, "quietTimes": "23:00-07:00"}
+        device.update_device_detail.assert_not_called()
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_set_quiet_start_resends_window(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test setting the start time re-sends quietMode with the new start, current end."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        device.detail = {"quietEnable": True, "quietTimes": "23:00-07:00"}
+        mock_coordinator.account.request = AsyncMock(return_value={"returnCode": 0})
+        device.update_device_detail = AsyncMock(return_value={})
+
+        await device.async_set_quiet_start(time(22, 30))
+
+        pms = mock_coordinator.account.request.call_args[0][1]
+        assert pms["enable"] == "true"
+        assert pms["times"] == "22:30-07:00"
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_set_all_timings_sends_string_bool(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test async_set_all_timings posts allTimingToggle with a string boolean."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        mock_coordinator.account.request = AsyncMock(return_value={"returnCode": 0})
+        device.update_device_detail = AsyncMock(return_value={})
+
+        await device.async_set_all_timings(False)
+
+        call_args = mock_coordinator.account.request.call_args
+        assert call_args[0][0] == "token/visualScooper/allTimingToggle"
+        assert call_args[0][1] == {"deviceId": "ultra1", "enable": "false"}
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_set_auto_update_pet_weight_sends_string_bool(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test async_set_auto_update_pet_weight posts the autoUpdate endpoint."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        mock_coordinator.account.request = AsyncMock(return_value={"returnCode": 0})
+        device.update_device_detail = AsyncMock(return_value={})
+
+        await device.async_set_auto_update_pet_weight(True)
+
+        call_args = mock_coordinator.account.request.call_args
+        assert call_args[0][0] == "token/visualScooper/pet/weight/autoUpdate"
+        assert call_args[0][1] == {"deviceId": "ultra1", "enable": "true"}
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_reset_litter_uses_visual_scooper_endpoint(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test async_reset_litter posts the Pro Ultra litter reset, deviceId only."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        mock_coordinator.account.request = AsyncMock(return_value={"returnCode": 0})
+        device.update_device_detail = AsyncMock(return_value={})
+
+        await device.async_reset_litter()
+
+        call_args = mock_coordinator.account.request.call_args
+        assert call_args[0][0] == "token/visualScooper/litter/reset"
+        assert call_args[0][1] == {"deviceId": "ultra1"}
+        assert call_args[0][2] == "POST"
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_reset_deodorant_uses_visual_scooper_endpoint(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test async_reset_deodorant posts the Pro Ultra deodorant reset, deviceId only."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        mock_coordinator.account.request = AsyncMock(return_value={"returnCode": 0})
+        device.update_device_detail = AsyncMock(return_value={})
+
+        await device.async_reset_deodorant()
+
+        call_args = mock_coordinator.account.request.call_args
+        assert call_args[0][0] == "token/visualScooper/deodorant/reset"
+        assert call_args[0][1] == {"deviceId": "ultra1"}
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_add_timing_sends_setting_without_timing_id(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test async_add_timing posts addTiming with timingSetting and no timingId."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        mock_coordinator.account.request = AsyncMock(return_value={"returnCode": 0})
+        device.update_timings = AsyncMock(return_value=[])
+
+        await device.async_add_timing("09:30")
+
+        call_args = mock_coordinator.account.request.call_args
+        assert call_args[0][0] == "token/visualScooper/addTiming"
+        assert call_args[0][1] == {"deviceId": "ultra1", "timingSetting": "09:30"}
+        assert "timingId" not in call_args[0][1]
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_update_timing_sends_setting_and_timing_id(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test async_update_timing posts updTiming with both setting and timingId."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        mock_coordinator.account.request = AsyncMock(return_value={"returnCode": 0})
+        device.update_timings = AsyncMock(return_value=[])
+
+        await device.async_update_timing("t3", "10:15")
+
+        call_args = mock_coordinator.account.request.call_args
+        assert call_args[0][0] == "token/visualScooper/updTiming"
+        assert call_args[0][1] == {
+            "deviceId": "ultra1",
+            "timingSetting": "10:15",
+            "timingId": "t3",
+        }
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_remove_timing_sends_timing_id_without_setting(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test async_remove_timing posts delTiming with timingId and no timingSetting."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        mock_coordinator.account.request = AsyncMock(return_value={"returnCode": 0})
+        device.update_timings = AsyncMock(return_value=[])
+
+        await device.async_remove_timing("t2")
+
+        call_args = mock_coordinator.account.request.call_args
+        assert call_args[0][0] == "token/visualScooper/delTiming"
+        assert call_args[0][1] == {"deviceId": "ultra1", "timingId": "t2"}
+        assert "timingSetting" not in call_args[0][1]
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_toggle_timing_status_inverts_enabled(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test enabled maps to status 0 (on) and disabled to status 1 (off)."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        mock_coordinator.account.request = AsyncMock(return_value={"returnCode": 0})
+        device.update_timings = AsyncMock(return_value=[])
+
+        await device.async_toggle_timing("t1", True)
+        assert mock_coordinator.account.request.call_args[0][0] == (
+            "token/visualScooper/timingToggle"
+        )
+        assert mock_coordinator.account.request.call_args[0][1]["status"] == "0"
+
+        await device.async_toggle_timing("t1", False)
+        assert mock_coordinator.account.request.call_args[0][1]["status"] == "1"
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_add_timing_error_surfaces_without_changing_schedules(
+        self, mock_coordinator, sample_pro_ultra_data, pro_ultra_timings_body
+    ) -> None:
+        """Test a schedule write error returns False and leaves the list untouched."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        device._timings = list(pro_ultra_timings_body)  # noqa: SLF001
+        mock_coordinator.account.request = AsyncMock(
+            return_value={"returnCode": 5, "msg": "nope"}
+        )
+        device.update_timings = AsyncMock()
+
+        result = await device.async_add_timing("09:30")
+
+        assert result is False
+        assert device._action_error is not None  # noqa: SLF001
+        assert device.schedules == 4
+        device.update_timings.assert_not_called()
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_update_timings_posts_and_stores_list(
+        self, mock_coordinator, sample_pro_ultra_data, pro_ultra_timings_body
+    ) -> None:
+        """Test update_timings posts to the timings endpoint and stores the list."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        mock_coordinator.account.request = AsyncMock(
+            return_value={"data": {"timings": pro_ultra_timings_body}}
+        )
+
+        result = await device.update_timings()
+
+        assert result == pro_ultra_timings_body
+        assert device.schedules == 4
+        call_args = mock_coordinator.account.request.call_args
+        assert call_args[0][0] == "token/visualScooper/timings"
+        assert call_args[0][2] == "POST"
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_update_about_fetches_about_device(
+        self, mock_coordinator, sample_pro_ultra_data, pro_ultra_about_body
+    ) -> None:
+        """Test update_about fetches aboutDevice and stores data.info."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        mock_coordinator.account.request = AsyncMock(
+            return_value={"data": {"info": pro_ultra_about_body}}
+        )
+
+        result = await device.update_about()
+
+        assert result == pro_ultra_about_body
+        assert device.about == "Standard"
+        assert (
+            mock_coordinator.account.request.call_args[0][0]
+            == "token/visualScooper/aboutDevice"
+        )
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_schedules_round_trip_against_fake_cloud(
+        self, mock_coordinator, sample_pro_ultra_data
+    ) -> None:
+        """Test add then list reflects the new schedule against an in-memory fake cloud."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        store: list[dict] = []
+
+        async def fake_request(api, pms=None, method="GET", **kwargs):
+            if api == "token/visualScooper/addTiming":
+                store.append(
+                    {"id": f"t{len(store) + 1}", "status": 0, "setting": pms["timingSetting"]}
+                )
+                return {"returnCode": 0}
+            if api == "token/visualScooper/timings":
+                return {"data": {"timings": list(store)}}
+            return {"returnCode": 0}
+
+        mock_coordinator.account.request = AsyncMock(side_effect=fake_request)
+
+        await device.async_add_timing("09:30")
+        await device.update_timings()
+
+        assert device.schedules == 1
+        assert device._timings[0]["setting"] == "09:30"  # noqa: SLF001
 
 
 class TestScooperDevice:
