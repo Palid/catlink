@@ -365,6 +365,7 @@ class TestCatlinkTimeEntity:
         )
         entity.coordinator = mock_coordinator
         entity.hass = hass
+        entity.entity_id = "time.litter_box_599_eeff_quiet_start"
 
         result = await entity.async_set_value(time(22, 30))
         assert result is True
