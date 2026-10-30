@@ -8,12 +8,15 @@ from homeassistant.helpers import config_validation as cv
 from .const import (
     _LOGGER,
     CONF_ACCOUNTS,
+    CONF_ACCOUNT_ID,
     CONF_DEVICE_IDS,
     DOMAIN,
     SUPPORTED_DOMAINS,
 )
+from .helpers import account_uid
 from .modules.account import Account
 from .modules.devices_coordinator import DevicesCoordinator
+from .sensor import async_register_request_api_service
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -30,6 +33,26 @@ async def async_setup(hass: HomeAssistant, hass_config: dict) -> bool:
     return True
 
 
+def _adopt_account_id(hass: HomeAssistant, entry: ConfigEntry, acc: Account) -> None:
+    """Move an entry keyed by a phone onto the account id its sign-in returned."""
+    account_id = acc.account_id
+    if not account_id or entry.unique_id == account_id:
+        return
+    if hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, account_id):
+        _LOGGER.warning(
+            "Another config entry already holds account id %s, so entry %s keeps its"
+            " current unique id",
+            account_id,
+            entry.entry_id,
+        )
+        return
+    hass.config_entries.async_update_entry(
+        entry,
+        unique_id=account_id,
+        data={**entry.data, CONF_ACCOUNT_ID: account_id},
+    )
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up CatLink from a config entry."""
     hass.data[DOMAIN].setdefault("config", {})
@@ -42,12 +65,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await acc.async_check_auth()
     await coordinator.async_refresh()
+    _adopt_account_id(hass, entry, acc)
 
-    hass.data[DOMAIN][CONF_ACCOUNTS][acc.uid] = acc
-    hass.data[DOMAIN]["coordinators"][coordinator.name] = coordinator
+    uid = account_uid(entry.data)
+    hass.data[DOMAIN][CONF_ACCOUNTS][uid] = acc
+    hass.data[DOMAIN]["coordinators"][f"{DOMAIN}-{uid}-{CONF_DEVICES}"] = coordinator
     hass.data[DOMAIN]["entry_coordinators"][entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, SUPPORTED_DOMAINS)
+
+    await async_register_request_api_service(hass)
 
     return True
 
@@ -56,7 +83,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     await hass.config_entries.async_unload_platforms(entry, SUPPORTED_DOMAINS)
 
-    uid = f"{entry.data.get('phone_iac', '86')}-{entry.data.get('phone', '')}"
+    uid = account_uid(entry.data)
     if uid in hass.data[DOMAIN][CONF_ACCOUNTS]:
         del hass.data[DOMAIN][CONF_ACCOUNTS][uid]
     coordinator_name = f"{DOMAIN}-{uid}-{CONF_DEVICES}"

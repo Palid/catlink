@@ -39,6 +39,7 @@ def mock_account():
     with patch("custom_components.catlink.Account") as mock:
         instance = mock.return_value
         instance.uid = "86-13812345678"
+        instance.account_id = ""
         instance.hass = None
         instance.async_check_auth = AsyncMock()
         instance.get_devices = AsyncMock(return_value=[])
@@ -131,7 +132,7 @@ async def test_platforms_loaded(init_integration: MockConfigEntry) -> None:
     """Test all supported platforms are loaded."""
     assert init_integration.state is ConfigEntryState.LOADED
     for domain in SUPPORTED_DOMAINS:
-        assert domain in ["sensor", "binary_sensor", "switch", "select", "button"]
+        assert domain in ["sensor", "binary_sensor", "switch", "select", "button", "number", "time"]
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")

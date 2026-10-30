@@ -4,13 +4,20 @@ from unittest.mock import AsyncMock, patch
 
 from custom_components.catlink.config_flow import _device_label
 from custom_components.catlink.const import (
+    CONF_ACCOUNT_ID,
+    CONF_API_BASE,
+    CONF_CLIENT_SERVER,
+    CONF_COUNTRY_CODE,
     CONF_DEVICE_IDS,
+    CONF_EMAIL,
     CONF_PHONE,
     CONF_PHONE_IAC,
+    CONF_SWITCH_IDENTIFIER,
     CONF_UPDATE_INTERVAL,
     DOMAIN,
     ERROR_INVALID_AUTH,
 )
+from custom_components.catlink.helpers import RegionDiscovery
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -70,7 +77,9 @@ def mock_discover_region():
     with patch(
         "custom_components.catlink.config_flow.discover_region",
         new_callable=AsyncMock,
-        return_value="global",
+        return_value=RegionDiscovery(
+            "https://app.catlinks.cn/api/", "acc-1", None, None
+        ),
     ):
         yield
 
@@ -81,20 +90,20 @@ def mock_account():
     with patch("custom_components.catlink.config_flow.Account") as mock:
         instance = mock.return_value
         instance.uid = "86-13812345678"
+        instance.account_id = "acc-1"
         instance.async_check_auth = AsyncMock()
         instance.get_devices = AsyncMock(return_value=[])
         yield mock
 
 
 async def test_user_step_form(hass: HomeAssistant, enable_custom_integrations) -> None:
-    """Test the initial user step shows the form."""
+    """Test the initial user step shows the sign-in method menu."""
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": SOURCE_USER}
     )
-    assert result["type"] == data_entry_flow.FlowResultType.FORM
+    assert result["type"] == data_entry_flow.FlowResultType.MENU
     assert result["step_id"] == "user"
-    assert "phone" in result["data_schema"].schema
-    assert "password" in result["data_schema"].schema
+    assert set(result["menu_options"]) == {"email", "phone"}
 
 
 async def test_user_step_success_no_devices(
@@ -105,6 +114,9 @@ async def test_user_step_success_no_devices(
 
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": "phone"}
     )
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -137,6 +149,9 @@ async def test_user_step_success_with_devices(
         DOMAIN, context={"source": SOURCE_USER}
     )
     result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": "phone"}
+    )
+    result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
         {"phone": "+8613812345678", "password": "testpass"},
     )
@@ -152,10 +167,13 @@ async def test_user_step_invalid_auth(
     with patch(
         "custom_components.catlink.config_flow.discover_region",
         new_callable=AsyncMock,
-        return_value=None,
+        return_value=RegionDiscovery(None, None, None, None),
     ):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"next_step_id": "phone"}
         )
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
@@ -191,6 +209,9 @@ async def test_discovery_step_form(
         DOMAIN, context={"source": SOURCE_USER}
     )
     result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": "phone"}
+    )
+    result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
         {"phone": "+8613812345678", "password": "testpass"},
     )
@@ -218,6 +239,9 @@ async def test_discovery_step_create_entry(
 
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": "phone"}
     )
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -257,7 +281,7 @@ async def test_reauth_flow(
     )
 
     assert result["type"] == data_entry_flow.FlowResultType.FORM
-    assert result["step_id"] == "user"
+    assert result["step_id"] == "phone"
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -289,7 +313,7 @@ async def test_reauth_flow_invalid_auth(
     with patch(
         "custom_components.catlink.config_flow.discover_region",
         new_callable=AsyncMock,
-        return_value=None,
+        return_value=RegionDiscovery(None, None, None, None),
     ):
         result = await hass.config_entries.flow.async_init(
             DOMAIN,
@@ -352,3 +376,533 @@ async def test_options_flow(
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_DEVICE_IDS] == ["dev1", "dev2"]
     assert result["data"][CONF_UPDATE_INTERVAL] == 300
+
+
+async def _pick_sign_in_method(hass: HomeAssistant, method: str) -> dict:
+    """Start a user flow and choose a Sign-in Method from the menu."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+    return await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": method}
+    )
+
+
+async def test_email_step_form(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    """Test the Email step asks for an Email and a password."""
+    result = await _pick_sign_in_method(hass, "email")
+
+    assert result["type"] == data_entry_flow.FlowResultType.FORM
+    assert result["step_id"] == "email"
+    assert CONF_EMAIL in result["data_schema"].schema
+    assert "password" in result["data_schema"].schema
+
+
+async def test_phone_step_form(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    """Test the Phone step asks for a Phone and a password."""
+    result = await _pick_sign_in_method(hass, "phone")
+
+    assert result["type"] == data_entry_flow.FlowResultType.FORM
+    assert result["step_id"] == "phone"
+    assert CONF_PHONE in result["data_schema"].schema
+    assert "password" in result["data_schema"].schema
+
+
+async def test_email_sign_in_creates_entry_keyed_by_account(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test Email sign-in creates an entry whose unique id is the Account id."""
+    mock_account.return_value.uid = "acc-1"
+    mock_account.return_value.get_devices = AsyncMock(return_value=[])
+
+    result = await _pick_sign_in_method(hass, "email")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_EMAIL: "cat@example.com", "password": "testpass"},
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert result["title"] == "cat@example.com"
+    assert result["data"][CONF_EMAIL] == "cat@example.com"
+    assert CONF_PHONE not in result["data"]
+    assert result["result"].unique_id == "acc-1"
+
+
+async def test_email_sign_in_reaches_discovery(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test Email sign-in with devices continues to the discovery step."""
+    mock_account.return_value.uid = "acc-1"
+    mock_account.return_value.get_devices = AsyncMock(
+        return_value=[
+            {
+                "id": "dev1",
+                "deviceName": "Litter Box",
+                "model": "LB599",
+                "deviceType": "LITTER_BOX_599",
+            }
+        ]
+    )
+
+    result = await _pick_sign_in_method(hass, "email")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_EMAIL: "cat@example.com", "password": "testpass"},
+    )
+
+    assert result["step_id"] == "discovery"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_DEVICE_IDS: ["dev1"], CONF_UPDATE_INTERVAL: 120},
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert result["title"] == "cat@example.com"
+    assert result["result"].unique_id == "acc-1"
+
+
+async def test_phone_sign_in_creates_entry_keyed_by_account(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test Phone sign-in is keyed by the Account id and adds no Email key."""
+    mock_account.return_value.uid = "acc-1"
+    mock_account.return_value.get_devices = AsyncMock(return_value=[])
+
+    result = await _pick_sign_in_method(hass, "phone")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_PHONE: "+8613812345678", "password": "testpass"},
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert result["result"].unique_id == "acc-1"
+    assert CONF_EMAIL not in result["data"]
+
+
+async def test_email_step_invalid_auth_stays_on_email_form(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    """Test a failed Email sign-in reports on the Email form."""
+    with patch(
+        "custom_components.catlink.config_flow.discover_region",
+        new_callable=AsyncMock,
+        return_value=RegionDiscovery(None, None, None, None),
+    ):
+        result = await _pick_sign_in_method(hass, "email")
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_EMAIL: "cat@example.com", "password": "wrongpass"},
+        )
+
+    assert result["type"] == data_entry_flow.FlowResultType.FORM
+    assert result["step_id"] == "email"
+    assert result["errors"]["base"] == ERROR_INVALID_AUTH
+
+
+async def test_phone_step_invalid_auth_stays_on_phone_form(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    """Test a failed Phone sign-in reports on the Phone form."""
+    with patch(
+        "custom_components.catlink.config_flow.discover_region",
+        new_callable=AsyncMock,
+        return_value=RegionDiscovery(None, None, None, None),
+    ):
+        result = await _pick_sign_in_method(hass, "phone")
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_PHONE: "+8613812345678", "password": "wrongpass"},
+        )
+
+    assert result["type"] == data_entry_flow.FlowResultType.FORM
+    assert result["step_id"] == "phone"
+    assert result["errors"]["base"] == ERROR_INVALID_AUTH
+
+
+async def test_reauth_email_entry_opens_email_form(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test re-authentication of an Email entry skips the menu."""
+    mock_account.return_value.uid = "acc-1"
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_EMAIL: "cat@example.com",
+            CONF_ACCOUNT_ID: "acc-1",
+            "api_base": "https://app.catlinks.cn/api/",
+            "password": "oldpass",
+        },
+        unique_id="acc-1",
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_REAUTH, "entry_id": entry.entry_id},
+        data=entry.data,
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.FORM
+    assert result["step_id"] == "email"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_EMAIL: "cat@example.com", "password": "newpass"},
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    assert entry.data[CONF_EMAIL] == "cat@example.com"
+    assert entry.data["password"] == "newpass"
+
+
+async def test_reauth_aborts_when_signed_in_to_a_different_account(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test re-authentication onto a different Account is refused."""
+    mock_account.return_value.uid = "acc-2"
+    mock_account.return_value.account_id = "acc-2"
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_EMAIL: "cat@example.com",
+            CONF_ACCOUNT_ID: "acc-1",
+            "api_base": "https://app.catlinks.cn/api/",
+            "password": "oldpass",
+        },
+        unique_id="acc-1",
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_REAUTH, "entry_id": entry.entry_id},
+        data=entry.data,
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_EMAIL: "other@example.com", "password": "newpass"},
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.ABORT
+    assert result["reason"] == "wrong_account"
+    assert entry.data[CONF_EMAIL] == "cat@example.com"
+
+
+async def test_reauth_does_not_collide_with_another_entrys_account(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test re-authenticating a legacy entry onto an id another entry holds aborts."""
+    mock_account.return_value.uid = "acc-1"
+    mock_account.return_value.account_id = "acc-1"
+    email_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_EMAIL: "cat@example.com",
+            CONF_ACCOUNT_ID: "acc-1",
+            "api_base": "https://app.catlinks.cn/api/",
+            "password": "emailpass",
+        },
+        unique_id="acc-1",
+    )
+    email_entry.add_to_hass(hass)
+    phone_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_PHONE_IAC: "86",
+            CONF_PHONE: "13812345678",
+            "api_base": "https://app.catlinks.cn/api/",
+            "password": "oldpass",
+        },
+        unique_id="86-13812345678",
+    )
+    phone_entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_REAUTH, "entry_id": phone_entry.entry_id},
+        data=phone_entry.data,
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_PHONE: "+8613812345678", "password": "newpass"},
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+    assert phone_entry.unique_id == "86-13812345678"
+    unique_ids = [entry.unique_id for entry in hass.config_entries.async_entries(DOMAIN)]
+    assert len(unique_ids) == len(set(unique_ids))
+
+
+async def test_email_sign_in_without_account_id_still_dedupes(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test an Email entry with no Account id is keyed by Email and not duplicated."""
+    mock_account.return_value.uid = ""
+    mock_account.return_value.account_id = ""
+    mock_account.return_value.get_devices = AsyncMock(return_value=[])
+
+    with patch(
+        "custom_components.catlink.config_flow.discover_region",
+        new_callable=AsyncMock,
+        return_value=RegionDiscovery(
+            "https://app.catlinks.cn/api/", None, None, None
+        ),
+    ):
+        result = await _pick_sign_in_method(hass, "email")
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_EMAIL: "cat@example.com", "password": "testpass"},
+        )
+        assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+        assert result["result"].unique_id == "cat@example.com"
+
+        result = await _pick_sign_in_method(hass, "email")
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_EMAIL: "cat@example.com", "password": "testpass"},
+        )
+
+    assert result["type"] == data_entry_flow.FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
+
+
+async def test_legacy_entry_adopts_account_id_then_matches_email_sign_in(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test a Phone-keyed entry adopts the Account id and is then matched by Email."""
+    mock_account.return_value.uid = "acc-1"
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_PHONE_IAC: "86",
+            CONF_PHONE: "13812345678",
+            "api_base": "https://app.catlinks.cn/api/",
+            "password": "oldpass",
+        },
+        unique_id="86-13812345678",
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_REAUTH, "entry_id": entry.entry_id},
+        data=entry.data,
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_PHONE: "+8613812345678", "password": "newpass"},
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.ABORT
+    assert entry.unique_id == "acc-1"
+
+    result = await _pick_sign_in_method(hass, "email")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_EMAIL: "cat@example.com", "password": "testpass"},
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.FORM
+    assert result["step_id"] == "switch_identifier"
+
+
+async def test_switch_identifier_accepted_updates_existing_entry(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test accepting the switch moves the entry to the new Account Identifier."""
+    mock_account.return_value.uid = "acc-1"
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_PHONE_IAC: "86",
+            CONF_PHONE: "13812345678",
+            CONF_ACCOUNT_ID: "acc-1",
+            "api_base": "https://app.catlinks.cn/api/",
+            "password": "oldpass",
+        },
+        unique_id="acc-1",
+    )
+    entry.add_to_hass(hass)
+
+    result = await _pick_sign_in_method(hass, "email")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_EMAIL: "cat@example.com", "password": "testpass"},
+    )
+
+    assert result["step_id"] == "switch_identifier"
+    assert result["description_placeholders"]["current_identifier"] == "+8613812345678"
+    assert result["description_placeholders"]["new_identifier"] == "cat@example.com"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_SWITCH_IDENTIFIER: True}
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.ABORT
+    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
+    assert entry.data[CONF_EMAIL] == "cat@example.com"
+    assert CONF_PHONE not in entry.data
+    assert entry.title == "cat@example.com"
+
+
+async def test_switch_identifier_declined_aborts_as_already_configured(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test declining the switch leaves a single, unchanged entry."""
+    mock_account.return_value.uid = "acc-1"
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_PHONE_IAC: "86",
+            CONF_PHONE: "13812345678",
+            CONF_ACCOUNT_ID: "acc-1",
+            "api_base": "https://app.catlinks.cn/api/",
+            "password": "oldpass",
+        },
+        unique_id="acc-1",
+    )
+    entry.add_to_hass(hass)
+
+    result = await _pick_sign_in_method(hass, "email")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_EMAIL: "cat@example.com", "password": "testpass"},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_SWITCH_IDENTIFIER: False}
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
+    assert CONF_EMAIL not in entry.data
+
+
+async def test_same_account_identifier_aborts_as_already_configured(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test re-adding the same Account Identifier does not offer a switch."""
+    mock_account.return_value.uid = "acc-1"
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_EMAIL: "cat@example.com",
+            CONF_ACCOUNT_ID: "acc-1",
+            "api_base": "https://app.catlinks.cn/api/",
+            "password": "testpass",
+        },
+        unique_id="acc-1",
+    )
+    entry.add_to_hass(hass)
+
+    result = await _pick_sign_in_method(hass, "email")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_EMAIL: "cat@example.com", "password": "testpass"},
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+
+
+async def test_two_accounts_create_two_entries(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test two distinct Accounts can be configured side by side."""
+    mock_account.return_value.get_devices = AsyncMock(return_value=[])
+
+    mock_account.return_value.uid = "acc-1"
+    result = await _pick_sign_in_method(hass, "email")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_EMAIL: "cat@example.com", "password": "testpass"},
+    )
+    assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+
+    mock_account.return_value.uid = "acc-2"
+    result = await _pick_sign_in_method(hass, "phone")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_PHONE: "+8613812345678", "password": "testpass"},
+    )
+    assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+
+    entries = hass.config_entries.async_entries(DOMAIN)
+    assert {entry.unique_id for entry in entries} == {"acc-1", "acc-2"}
+
+
+async def test_entry_records_client_server_and_country_without_switching(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test the profile's region is stored on the entry but never switches the host."""
+    mock_account.return_value.uid = "acc-1"
+    mock_account.return_value.get_devices = AsyncMock(return_value=[])
+
+    with patch(
+        "custom_components.catlink.config_flow.discover_region",
+        new_callable=AsyncMock,
+        return_value=RegionDiscovery(
+            "https://app.catlinks.cn/api/", "acc-1", "1", "NO"
+        ),
+    ):
+        result = await _pick_sign_in_method(hass, "email")
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_EMAIL: "cat@example.com", "password": "testpass"},
+        )
+
+    assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_CLIENT_SERVER] == "1"
+    assert result["data"][CONF_COUNTRY_CODE] == "NO"
+    assert result["data"][CONF_API_BASE] == "https://app.catlinks.cn/api/"
+
+
+async def test_reauth_discovers_on_the_stored_base(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test re-authentication hands discovery the stored base to sign in on."""
+    mock_account.return_value.uid = "acc-1"
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_PHONE_IAC: "65",
+            CONF_PHONE: "91234567",
+            CONF_ACCOUNT_ID: "acc-1",
+            CONF_API_BASE: "https://app-sgp.catlinks.cn/api/",
+            "password": "oldpass",
+        },
+        unique_id="acc-1",
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.catlink.config_flow.discover_region",
+        new_callable=AsyncMock,
+        return_value=RegionDiscovery(
+            "https://app-sgp.catlinks.cn/api/", "acc-1", None, None
+        ),
+    ) as mock_disc:
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": SOURCE_REAUTH, "entry_id": entry.entry_id},
+            data=entry.data,
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_PHONE: "+6591234567", "password": "newpass"},
+        )
+
+    assert result["type"] == data_entry_flow.FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    mock_disc.assert_awaited_once()
+    assert (
+        mock_disc.call_args.kwargs["api_base"] == "https://app-sgp.catlinks.cn/api/"
+    )
