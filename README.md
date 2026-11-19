@@ -277,6 +277,8 @@ To keep both working, give Home Assistant its own Account:
 
 If Home Assistant detects repeated Evictions on one Account (three within an hour), it raises a repair issue pointing here so you can move to a dedicated Account; the issue clears after a day without an Eviction. If the Session cannot be reclaimed at all, Home Assistant asks you to re-authenticate.
 
+To use the phone app, or run a probe script, without Home Assistant reclaiming the Session, pause sign-in. Each entry has a hidden **CatLink sign-in** switch, a configuration entity attached to no Device. Find it under Settings → Devices & services → CatLink (New) → entities (show the hidden ones), or under Settings → Entities with hidden entities shown. While it is off, Home Assistant never signs in to the CatLink Cloud: requests with the current Session still go out, but once the Session is ended its entities become unavailable instead of reclaiming it, with no repair issue and no re-authentication prompt, and `catlink.request_api` fails saying sign-in is paused. The choice survives restarts. Turn the switch on to resume: Home Assistant signs in once if it needs to and refreshes.
+
 ## Services (Optional)
 
 #### Request API

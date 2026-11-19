@@ -26,6 +26,7 @@ import aiohttp
 from homeassistant.core import HomeAssistant
 
 from ..const import _LOGGER, ALIYUN_DOMAIN
+from ..helpers import SignInPausedError
 
 REFRESH_MARGIN = 3600
 
@@ -193,6 +194,8 @@ class AliyunChannel:
         """Fetch an authorisation code and exchange it for a new session."""
         try:
             auth_code = await self._request_auth_code()
+        except SignInPausedError:
+            raise
         except Exception as exc:  # noqa: BLE001 - any failure means reauth
             raise AliyunAuthFailed(f"authorisation code request failed: {exc}") from exc
         if not auth_code:

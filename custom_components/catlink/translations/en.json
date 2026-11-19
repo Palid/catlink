@@ -83,6 +83,13 @@
       }
     }
   },
+  "entity": {
+    "switch": {
+      "sign_in": {
+        "name": "CatLink sign-in"
+      }
+    }
+  },
   "issues": {
     "repeated_eviction": {
       "title": "CatLink keeps evicting your Session",

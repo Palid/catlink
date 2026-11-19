@@ -39,7 +39,7 @@ from ..const import (
     SCAN_INTERVAL,
     SIGN_KEY,
 )
-from ..helpers import Helper, account_uid, format_api_error
+from ..helpers import Helper, SignInPausedError, account_uid, format_api_error
 from .aliyun_channel import AliyunAuthFailed, AliyunChannel, AliyunRequestFailed
 
 API_ALIYUN_AUTH_CODE = "token/user/auth/aliLive/authCode"
@@ -77,6 +77,20 @@ class Account:
         self._aliyun: AliyunChannel | None = None
         self._eviction_times: list[datetime.datetime] = []
         self._eviction_repair_active = False
+        self.sign_in_paused = False
+        self._pause_store: Store | None = None
+
+    async def async_load_sign_in_paused(self, entry_id: str) -> None:
+        """Read the persisted pause flag, which setup must know before any sign-in."""
+        self._pause_store = Store(self.hass, 1, f"{DOMAIN}/sign_in-{entry_id}.json")
+        stored = await self._pause_store.async_load() or {}
+        self.sign_in_paused = bool(stored.get("paused"))
+
+    async def async_set_sign_in_paused(self, paused: bool) -> None:
+        """Pause or resume signing in, and persist the choice."""
+        self.sign_in_paused = paused
+        if self._pause_store is not None:
+            await self._pause_store.async_save({"paused": paused})
 
     def get_config(self, key, default=None) -> str:
         """Return the config of the account."""
@@ -187,6 +201,9 @@ class Account:
                     )
 
             if result.get("returnCode") == 1002 and not retried:
+                if self.sign_in_paused:
+                    _LOGGER.debug("Session ended (1002) while sign-in is paused")
+                    raise SignInPausedError("CatLink sign-in is paused")
                 self._note_eviction()
                 _LOGGER.info("Session evicted (1002); reclaiming the Session")
                 if await self.async_login():
@@ -263,6 +280,8 @@ class Account:
 
     async def async_login(self) -> bool:
         """Sign in with the account identifier the entry holds."""
+        if self.sign_in_paused:
+            raise SignInPausedError("CatLink sign-in is paused")
         if self.email:
             api = "login/email/v2"
             pms = {
@@ -329,7 +348,7 @@ class Account:
         """Check the auth of the account."""
         uid = self.uid
         if not uid:
-            if not save:
+            if not save and not self.sign_in_paused:
                 await self.async_login()
             return {}
         fnm = f"{DOMAIN}/auth-{uid}.json"
@@ -352,7 +371,7 @@ class Account:
                     CONF_TOKEN: old.get(CONF_TOKEN),
                 }
             )
-        else:
+        elif not self.sign_in_paused:
             await self.async_login()
         return old
 

@@ -63,6 +63,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     device_ids = entry.options.get(CONF_DEVICE_IDS) if entry.options else None
     coordinator = DevicesCoordinator(acc, entry.entry_id, device_ids=device_ids)
 
+    await acc.async_load_sign_in_paused(entry.entry_id)
     await acc.async_check_auth()
     await coordinator.async_refresh()
     _adopt_account_id(hass, entry, acc)

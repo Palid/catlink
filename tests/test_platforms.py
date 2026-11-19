@@ -42,6 +42,7 @@ def mock_account():
         instance.account_id = ""
         instance.hass = None
         instance.async_check_auth = AsyncMock()
+        instance.async_load_sign_in_paused = AsyncMock()
         instance.get_devices = AsyncMock(return_value=[])
         instance.update_interval = __import__("datetime").timedelta(minutes=1)
         instance.get_config = MagicMock(return_value=None)
@@ -183,6 +184,7 @@ async def test_switch_platform_setup_entry(
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN].setdefault("add_entities", {})
     hass.data[DOMAIN].setdefault("entry_coordinators", {})
+    hass.data[DOMAIN]["entry_coordinators"]["test-switch-entry"] = MagicMock()
 
     mock_add_entities = MagicMock()
     mock_config_entry = MockConfigEntry(

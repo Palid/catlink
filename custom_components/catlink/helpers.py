@@ -10,6 +10,7 @@ from phonenumbers import NumberParseException
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
 from .const import (
     _LOGGER,
@@ -30,6 +31,10 @@ from .const import (
 if TYPE_CHECKING:
     from .devices.base import Device
     from .modules.devices_coordinator import DevicesCoordinator
+
+
+class SignInPausedError(HomeAssistantError):
+    """Raised instead of signing in while sign-in is paused."""
 
 
 async def async_setup_domain_platform(
