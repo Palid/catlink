@@ -48,7 +48,7 @@ from .const import (
     ERROR_INVALID_AUTH,
     SUPPORTED_DEVICE_TYPES,
 )
-from .helpers import discover_region, parse_phone_number
+from .helpers import SignInPausedError, discover_region, parse_phone_number
 from .modules.account import Account
 from .modules.aliyun_channel import AliyunAuthFailed, AliyunRequestFailed
 
@@ -156,9 +156,11 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
                 .get("entry_coordinators", {})
                 .get(entry.entry_id)
             )
-            if coordinator is not None:
+            if coordinator is not None and not coordinator.account.sign_in_paused:
+                coordinator_loaded = True
                 account = coordinator.account
             else:
+                coordinator_loaded = False
                 account = Account(self.hass, dict(entry.data))
                 await account.async_check_auth()
             if not account.token:
@@ -166,7 +168,7 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
             elif _lacks_aliyun_credentials(credentials, await account.get_devices()):
                 errors[CONF_ALIYUN_CLOUD_KEY] = ERROR_ALIYUN_REQUIRED
             elif (
-                coordinator is not None
+                coordinator_loaded
                 and CONF_ALIYUN_CLOUD_KEY in credentials
                 and CONF_ALIYUN_CLOUD_SECRET in credentials
             ):
@@ -488,12 +490,30 @@ class CatlinkOptionsFlowHandler(OptionsFlowWithReload):
         if user_input is not None:
             return self.async_create_entry(data=user_input)
 
-        account = Account(
-            self.hass,
-            {**dict(self.config_entry.data), **dict(self.config_entry.options or {})},
+        coordinator = (
+            self.hass.data.get(DOMAIN, {})
+            .get("entry_coordinators", {})
+            .get(self.config_entry.entry_id)
         )
-        await account.async_check_auth()
-        devices = await account.get_devices() or []
+        if coordinator is not None:
+            account = coordinator.account
+        else:
+            account = Account(
+                self.hass,
+                {
+                    **dict(self.config_entry.data),
+                    **dict(self.config_entry.options or {}),
+                },
+            )
+            await account.async_check_auth()
+        try:
+            devices = await account.get_devices() or []
+        except SignInPausedError:
+            devices = [
+                dvc.data
+                for dvc in (coordinator.data or {}).values()
+                if dvc.data.get("deviceType") != "CAT"
+            ]
 
         device_options: dict[str, str] = {}
         supported_ids: list[str] = []

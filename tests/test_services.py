@@ -60,6 +60,7 @@ async def _setup_entry(hass: HomeAssistant, phone: str, entry_id: str) -> MockCo
         account.uid = f"86-{phone}"
         account.account_id = ""
         account.async_check_auth = AsyncMock()
+        account.async_load_sign_in_paused = AsyncMock()
 
         coordinator = mock_coordinator_cls.return_value
         coordinator.name = f"{DOMAIN}-86-{phone}-devices"

@@ -43,6 +43,7 @@ def mock_account():
         instance.uid = "86-13812345678"
         instance.account_id = ""
         instance.async_check_auth = AsyncMock()
+        instance.async_load_sign_in_paused = AsyncMock()
         yield mock
 
 

@@ -3,7 +3,7 @@
 import asyncio
 
 from homeassistant.const import CONF_DEVICES
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
 from .account import Account
@@ -11,6 +11,7 @@ from ..const import _LOGGER, CONF_DEVICE_IDS, DOMAIN, SUPPORTED_DOMAINS
 from ..cats import Cat
 from ..devices.registry import create_device
 from ..entities.registry import DOMAIN_ENTITY_CLASSES
+from ..helpers import SignInPausedError
 from ..models.additional_cfg import AdditionalDeviceConfig
 
 
@@ -42,6 +43,13 @@ class DevicesCoordinator(DataUpdateCoordinator):
 
     async def _async_update_data(self) -> dict:
         """Update data via API."""
+        try:
+            return await self._async_fetch()
+        except SignInPausedError as exc:
+            raise UpdateFailed(str(exc)) from exc
+
+    async def _async_fetch(self) -> dict:
+        """Fetch the Devices and Cats and refresh their entities."""
         dls = await self.account.get_devices()
         for dat in dls:
             did = dat.get("id")
