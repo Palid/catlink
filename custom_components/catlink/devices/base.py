@@ -2,7 +2,9 @@
 
 from typing import TYPE_CHECKING
 
-from ..const import _LOGGER
+from homeassistant.helpers.device_registry import DeviceInfo
+
+from ..const import _LOGGER, DOMAIN
 from ..helpers import format_api_error
 from ..models.additional_cfg import AdditionalDeviceConfig
 from ..models.api.device import DeviceInfoBase
@@ -103,6 +105,28 @@ class Device:
             return self.data.get("deviceName", "")
         except (TypeError, ValueError):
             return None
+
+    @property
+    def registry_id(self) -> str:
+        """Return the id the entity and device registries know this device by."""
+        return f"{self.type}_{self.mac}"
+
+    @property
+    def object_id_prefix(self) -> str:
+        """Return the prefix of the generated entity ids."""
+        mac = self.mac[-4:] if self.mac else self.id
+        return f"{self.type}_{mac}"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return the device registry entry for this device."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.registry_id)},
+            name=self.name,
+            model=self.model,
+            manufacturer="CatLink",
+            sw_version=self.detail.get("firmwareVersion"),
+        )
 
     @property
     def error(self) -> str:

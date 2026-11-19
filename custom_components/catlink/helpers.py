@@ -329,6 +329,7 @@ class Helper:
             if coordinator.data is not None:
                 for sta in coordinator.data.values():
                     await coordinator.update_hass_entities(domain, sta)
+                await coordinator.update_cat_entities(domain)
 
     @staticmethod
     def async_setup_entry_for(domain: str):
@@ -351,5 +352,6 @@ class Helper:
             if coordinator is not None and coordinator.data is not None:
                 for sta in coordinator.data.values():
                     await coordinator.update_hass_entities(domain, sta)
+                await coordinator.update_cat_entities(domain)
 
         return _async_setup_entry

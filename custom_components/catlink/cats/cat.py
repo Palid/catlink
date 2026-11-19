@@ -1,16 +1,18 @@
-"""Cat device class for CatLink integration."""
+"""Cat class for CatLink integration."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from custom_components.catlink.devices.base import Device
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.const import UnitOfMass
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.util import dt as dt_util
 
+from ..const import DOMAIN
+
 if TYPE_CHECKING:
-    from custom_components.catlink.modules.devices_coordinator import DevicesCoordinator
+    from ..modules.devices_coordinator import DevicesCoordinator
 
 
 GENDER_LABELS: dict[int, str] = {
@@ -21,37 +23,64 @@ GENDER_LABELS: dict[int, str] = {
 }
 
 
-class CatDevice(Device):
-    """Cat device class for CatLink integration."""
+class Cat:
+    """A pet profile on an Account, with its health and visit data."""
 
     def __init__(
-        self,
-        dat: dict,
-        coordinator: DevicesCoordinator,
-        additional_config: Any | None = None,
+        self, dat: dict, summary: dict, coordinator: DevicesCoordinator
     ) -> None:
-        """Initialize the cat device."""
-        super().__init__(dat, coordinator, additional_config)
+        """Initialize the cat."""
+        self.coordinator = coordinator
+        self.listeners = {}
+        self.update(dat, summary)
 
-    async def async_init(self) -> None:
-        """Initialize the device."""
-        self.detail = self.data
+    def update(self, dat: dict, summary: dict) -> None:
+        """Update cat data and notify the entity listeners."""
+        self.data = dat
+        self.summary_simple = summary
+        for fun in self.listeners.values():
+            fun()
 
-    def update_data(self, dat: dict) -> None:
-        """Update device data."""
-        super().update_data(dat)
-        self.detail = dat
+    @property
+    def _legacy_id(self) -> str:
+        # Kept so entries already in the entity and device registries still match.
+        return f"cat-{self.pet_id}"
 
-    async def update_device_detail(self) -> dict:
-        """Update device detail (cats use list payload)."""
-        self.detail = self.data
-        self._handle_listeners()
-        return self.detail
+    @property
+    def registry_id(self) -> str:
+        """Return the id the entity and device registries know this cat by."""
+        return f"CAT_{self._legacy_id}"
+
+    @property
+    def object_id_prefix(self) -> str:
+        """Return the prefix of the generated entity ids."""
+        return f"CAT_{self._legacy_id[-4:]}"
+
+    @property
+    def name(self) -> str:
+        """Return the cat name."""
+        return self.data.get("petName") or f"Cat {self.pet_id}"
+
+    @property
+    def model(self) -> str:
+        """Return the cat model."""
+        return self.data.get("breedName") or "Cat"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return the device registry entry for this cat."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.registry_id)},
+            name=self.name,
+            model=self.model,
+            manufacturer="CatLink",
+            sw_version=None,
+        )
 
     @property
     def pet_id(self) -> str | None:
         """Return the pet id."""
-        return self.data.get("pet_id") or self.data.get("id")
+        return self.data.get("id")
 
     @property
     def weight(self) -> float | None:
@@ -102,7 +131,7 @@ class CatDevice(Device):
         return None
 
     def _summary(self) -> dict:
-        return self.data.get("summary_simple") or {}
+        return self.summary_simple or {}
 
     def _summary_section(self, name: str) -> dict:
         summary = self._summary()
@@ -250,23 +279,3 @@ class CatDevice(Device):
                 "icon": "mdi:run",
             },
         }
-
-    @property
-    def hass_binary_sensor(self) -> dict:
-        """Return empty binary sensors for cats."""
-        return {}
-
-    @property
-    def hass_switch(self) -> dict:
-        """Return empty switches for cats."""
-        return {}
-
-    @property
-    def hass_button(self) -> dict:
-        """Return empty buttons for cats."""
-        return {}
-
-    @property
-    def hass_select(self) -> dict:
-        """Return empty selects for cats."""
-        return {}
