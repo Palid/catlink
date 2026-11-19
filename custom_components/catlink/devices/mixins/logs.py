@@ -3,9 +3,10 @@
 import datetime
 from typing import Any
 
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from ...const import _LOGGER, DOMAIN
+from ...helpers import SignInPausedError
 from ...models.api.logs import LogEntry
 from ...models.api.parse import parse_response
 
@@ -71,6 +72,8 @@ class LogsMixin:
             else:
                 rdt = data.get(response_key) or []
             self.clear_warning("logs_fetch_failed")
+        except SignInPausedError as exc:
+            raise UpdateFailed(str(exc)) from exc
         except (TypeError, ValueError) as exc:
             self.warn_once(
                 "logs_fetch_failed", "Got device logs for %s failed: %s", self.name, exc

@@ -28,6 +28,7 @@ def mock_coordinator():
     coordinator = MagicMock()
     coordinator.account = MagicMock()
     coordinator.account.uid = "86-13812345678"
+    coordinator.account.sign_in_paused = False
     return coordinator
 
 

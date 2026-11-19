@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 
 from ..const import _LOGGER
-from ..helpers import format_api_error, optional_int
+from ..helpers import SignInPausedError, format_api_error, optional_int
 from ..models.additional_cfg import AdditionalDeviceConfig
 from ..models.api.device import LitterDeviceInfo
 from ..models.api.logs import LogEntry
@@ -745,6 +745,8 @@ class ScooperProUltraDevice(LitterDevice):
             channel = await self.account.async_aliyun_channel()
             await channel.async_set_properties(iot_id, {identifier: value})
         except AliyunAuthFailed as exc:
+            if self.account.sign_in_paused:
+                raise SignInPausedError("CatLink sign-in is paused") from exc
             raise ConfigEntryAuthFailed(str(exc)) from exc
         except AliyunRequestFailed as exc:
             raise HomeAssistantError(f"Aliyun write failed for {self.name}: {exc}") from exc
@@ -833,6 +835,8 @@ class ScooperProUltraDevice(LitterDevice):
             channel = await self.account.async_aliyun_channel()
             self.thing_properties = await channel.async_get_properties(iot_id)
         except AliyunAuthFailed as exc:
+            if self.account.sign_in_paused:
+                raise SignInPausedError("CatLink sign-in is paused") from exc
             raise ConfigEntryAuthFailed(str(exc)) from exc
         except AliyunRequestFailed as exc:
             self.warn_once(

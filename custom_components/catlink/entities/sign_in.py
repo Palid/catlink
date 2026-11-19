@@ -4,7 +4,6 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 
-from ..helpers import account_uid
 from ..modules.devices_coordinator import DevicesCoordinator
 
 
@@ -12,6 +11,7 @@ class CatlinkSignInSwitch(SwitchEntity):
     """Pauses or resumes signing in to the CatLink Cloud for one Account."""
 
     _attr_has_entity_name = True
+    _attr_should_poll = False
     _attr_translation_key = "sign_in"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_entity_registry_visible_default = False
@@ -20,7 +20,7 @@ class CatlinkSignInSwitch(SwitchEntity):
         """Initialize the switch."""
         self._coordinator = coordinator
         self._account = coordinator.account
-        self._attr_unique_id = f"{account_uid(entry.data)}-sign_in"
+        self._attr_unique_id = f"{entry.entry_id}-sign_in"
 
     @property
     def is_on(self) -> bool:

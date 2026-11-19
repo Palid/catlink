@@ -1216,6 +1216,7 @@ def _running_account(
     """Register a running Account for the entry the way async_setup_entry does."""
     account = MagicMock()
     account.token = "test-token"
+    account.sign_in_paused = False
     account.get_devices = AsyncMock(return_value=devices)
     account.async_check_aliyun_credentials = AsyncMock()
     hass.data.setdefault(DOMAIN, {}).setdefault("entry_coordinators", {})[

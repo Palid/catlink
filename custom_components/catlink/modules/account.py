@@ -79,16 +79,18 @@ class Account:
         self._eviction_repair_active = False
         self.sign_in_paused = False
         self._pause_store: Store | None = None
+        self._expect_ended_session = False
 
     async def async_load_sign_in_paused(self, entry_id: str) -> None:
         """Read the persisted pause flag, which setup must know before any sign-in."""
         self._pause_store = Store(self.hass, 1, f"{DOMAIN}/sign_in-{entry_id}.json")
         stored = await self._pause_store.async_load() or {}
-        self.sign_in_paused = bool(stored.get("paused"))
+        self.sign_in_paused = isinstance(stored, dict) and bool(stored.get("paused"))
 
     async def async_set_sign_in_paused(self, paused: bool) -> None:
         """Pause or resume signing in, and persist the choice."""
         self.sign_in_paused = paused
+        self._expect_ended_session = not paused
         if self._pause_store is not None:
             await self._pause_store.async_save({"paused": paused})
 
@@ -204,12 +206,18 @@ class Account:
                 if self.sign_in_paused:
                     _LOGGER.debug("Session ended (1002) while sign-in is paused")
                     raise SignInPausedError("CatLink sign-in is paused")
-                self._note_eviction()
-                _LOGGER.info("Session evicted (1002); reclaiming the Session")
+                if self._expect_ended_session:
+                    self._expect_ended_session = False
+                    _LOGGER.debug("Session ended while paused (1002); signing in")
+                else:
+                    self._note_eviction()
+                    _LOGGER.info("Session evicted (1002); reclaiming the Session")
                 if await self.async_login():
                     return await self.request(api, pms, method, _retried=True, **kwargs)
                 self._start_reauth()
             else:
+                if result.get("returnCode") != 1002:
+                    self._expect_ended_session = False
                 self._clear_eviction_repair_if_quiet()
 
             return result
