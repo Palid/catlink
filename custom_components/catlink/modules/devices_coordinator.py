@@ -8,6 +8,7 @@ from homeassistant.util import dt as dt_util
 
 from .account import Account
 from ..const import _LOGGER, CONF_DEVICE_IDS, DOMAIN, SUPPORTED_DOMAINS
+from ..cats import Cat
 from ..devices.registry import create_device
 from ..entities.registry import DOMAIN_ENTITY_CLASSES
 from ..models.additional_cfg import AdditionalDeviceConfig
@@ -32,6 +33,7 @@ class DevicesCoordinator(DataUpdateCoordinator):
         self.account = account
         self.config_entry_id = config_entry_id
         self._subs = {}
+        self.cats: dict[str, Cat] = {}
         self._device_ids = device_ids
         self.additional_config = self.hass.data[DOMAIN]["config"].get(CONF_DEVICES, {})
         self.additional_config = [
@@ -92,28 +94,22 @@ class DevicesCoordinator(DataUpdateCoordinator):
             pet_id = cat.get("id")
             if not pet_id:
                 continue
-            cat_data = {**cat}
-            cat_data["pet_id"] = pet_id
-            cat_data["id"] = f"cat-{pet_id}"
-            cat_data["mac"] = f"cat-{pet_id}"
-            cat_data["deviceType"] = "CAT"
-            cat_data["deviceName"] = cat_data.get("petName") or f"Cat {pet_id}"
-            cat_data.setdefault("model", cat_data.get("breedName") or "Cat")
-            cat_data["summary_simple"] = summary_map.get(pet_id, {})
-            did = cat_data["id"]
-            old = self.hass.data[DOMAIN][CONF_DEVICES].get(did)
+            summary = summary_map.get(pet_id, {})
+            old = self.cats.get(str(pet_id))
             if old:
-                dvc = old
-                dvc.update_data(cat_data)
+                old.update(cat, summary)
             else:
-                dvc = create_device(cat_data, self, None)
-                self.hass.data[DOMAIN][CONF_DEVICES][did] = dvc
-            await dvc.async_init()
-            for d in SUPPORTED_DOMAINS:
-                await self.update_hass_entities(d, dvc)
+                self.cats[str(pet_id)] = Cat(cat, summary, self)
+        for d in SUPPORTED_DOMAINS:
+            await self.update_cat_entities(d)
         return self.hass.data[DOMAIN][CONF_DEVICES]
 
-    async def update_hass_entities(self, domain, dvc) -> None:
+    async def update_cat_entities(self, domain) -> None:
+        """Update Home Assistant entities of every known cat."""
+        for pet_id, cat in self.cats.items():
+            await self.update_hass_entities(domain, cat, f"cat-{pet_id}")
+
+    async def update_hass_entities(self, domain, dvc, key_id=None) -> None:
         """Update Home Assistant entities."""
         hdk = f"hass_{domain}"
         add_entities = self.hass.data[DOMAIN].get("add_entities", {})
@@ -123,7 +119,7 @@ class DevicesCoordinator(DataUpdateCoordinator):
         added_entity_ids: list[str] = []
         entity_cls = DOMAIN_ENTITY_CLASSES.get(domain)
         for k, cfg in getattr(dvc, hdk).items():
-            key = f"{domain}.{k}.{dvc.id}"
+            key = f"{domain}.{k}.{key_id or dvc.id}"
             new = None
             if key in self._subs:
                 pass
@@ -135,7 +131,7 @@ class DevicesCoordinator(DataUpdateCoordinator):
                 added_entity_ids.append(new.entity_id)
         if added_entity_ids:
             _LOGGER.info(
-                "Device %s entities: %s",
+                "Entities for %s: %s",
                 dvc.name,
                 added_entity_ids,
             )

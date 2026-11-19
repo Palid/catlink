@@ -19,6 +19,7 @@ from homeassistant.components import persistent_notification
 from homeassistant.const import CONF_DEVICES
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_platform
+from homeassistant.helpers.device_registry import DeviceInfo
 
 
 def _make_config_entry(phone: str, entry_id: str) -> MockConfigEntry:
@@ -92,6 +93,11 @@ def fake_device():
     device.detail = {}
     device.listeners = {}
     device.coordinator = fake_coordinator
+    device.registry_id = "LITTER_BOX_599_AABBCCDDEEFF"
+    device.object_id_prefix = "LITTER_BOX_599_EEFF"
+    device.device_info = DeviceInfo(
+        identifiers={(DOMAIN, device.registry_id)}, name=device.name
+    )
     return device
 
 

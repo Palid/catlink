@@ -3,18 +3,18 @@
 import asyncio
 
 from homeassistant.components import persistent_notification
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import slugify
 
 from ..const import _LOGGER, DOMAIN
+from ..cats import Cat
 from ..devices.base import Device
 
 
 class CatlinkEntity(CoordinatorEntity):
     """CatlinkEntity."""
 
-    def __init__(self, name, device: Device, option=None) -> None:
+    def __init__(self, name, device: Device | Cat, option=None) -> None:
         """Initialize the entity."""
         self.coordinator = device.coordinator
         CoordinatorEntity.__init__(self, self.coordinator)
@@ -24,10 +24,9 @@ class CatlinkEntity(CoordinatorEntity):
         self._option = option or {}
         display_name = self._option.get("name", name)
         self._attr_name = f"{device.name} {display_name}".strip()
-        self._attr_device_id = f"{device.type}_{device.mac}"
+        self._attr_device_id = device.registry_id
         self._attr_unique_id = f"{self._attr_device_id}-{name}"
-        mac = device.mac[-4:] if device.mac else device.id
-        self._object_id = slugify(f"{device.type}_{mac}_{name}")
+        self._object_id = slugify(f"{device.object_id_prefix}_{name}")
         self._attr_icon = self._option.get("icon")
         self._attr_device_class = self._option.get("class")
         self._attr_native_unit_of_measurement = self._option.get("unit")
@@ -37,13 +36,7 @@ class CatlinkEntity(CoordinatorEntity):
             self._attr_entity_picture = entity_picture()
         elif entity_picture:
             self._attr_entity_picture = entity_picture
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, self._attr_device_id)},
-            name=device.name,
-            model=device.model,
-            manufacturer="CatLink",
-            sw_version=device.detail.get("firmwareVersion"),
-        )
+        self._attr_device_info = device.device_info
 
     def add_to_platform_start(self, hass, platform, parallel_updates) -> None:
         """Start adding the entity, suggesting an id in the platform's domain."""

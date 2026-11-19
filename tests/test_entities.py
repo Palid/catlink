@@ -3,6 +3,7 @@
 from datetime import time
 from unittest.mock import AsyncMock, MagicMock
 
+from custom_components.catlink.cats import Cat
 from custom_components.catlink.devices.base import Device
 from custom_components.catlink.devices.litterbox import LitterBox
 from custom_components.catlink.devices.scooper_pro_ultra import ScooperProUltraDevice
@@ -17,6 +18,7 @@ import pytest
 
 from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.device_registry import DeviceInfo
 
 
 @pytest.fixture
@@ -30,6 +32,15 @@ def mock_device():
     device.model = "LB599"
     device.detail = {"firmwareVersion": "1.0.0"}
     device.listeners = {}
+    device.registry_id = "LITTER_BOX_599_AABBCCDDEEFF"
+    device.object_id_prefix = "LITTER_BOX_599_EEFF"
+    device.device_info = DeviceInfo(
+        identifiers={("catlink", device.registry_id)},
+        name=device.name,
+        model=device.model,
+        manufacturer="CatLink",
+        sw_version="1.0.0",
+    )
     return device
 
 
@@ -61,34 +72,32 @@ class TestCatlinkEntity:
     """Tests for CatlinkEntity base class."""
 
     def test_entity_initialization(
-        self, hass, mock_device, mock_coordinator
+        self, hass, real_device, mock_coordinator
     ) -> None:
         """Test CatlinkEntity initializes with correct attributes."""
-        mock_device.coordinator = mock_coordinator
-        entity = CatlinkEntity("error", mock_device, {"icon": "mdi:alert"})
+        entity = CatlinkEntity("error", real_device, {"icon": "mdi:alert"})
         entity.coordinator = mock_coordinator
         entity.hass = hass
 
         assert entity._name == "error"
-        assert entity._device == mock_device
+        assert entity._device == real_device
         assert entity._attr_icon == "mdi:alert"
         assert "Test Litter Box" in entity._attr_name
         assert "error" in entity._attr_name
-        assert entity._attr_device_id == "LITTER_BOX_599_AABBCCDDEEFF"
-        assert entity._attr_unique_id == "LITTER_BOX_599_AABBCCDDEEFF-error"
+        assert entity._attr_device_id == "LITTER_BOX_599_AA:BB:CC:DD:EE:FF"
+        assert entity._attr_unique_id == "LITTER_BOX_599_AA:BB:CC:DD:EE:FF-error"
 
     def test_entity_device_info(
-        self, hass, mock_device, mock_coordinator
+        self, hass, real_device, mock_coordinator
     ) -> None:
         """Test CatlinkEntity device_info."""
-        mock_device.coordinator = mock_coordinator
-        entity = CatlinkEntity("state", mock_device)
+        entity = CatlinkEntity("state", real_device)
         entity.coordinator = mock_coordinator
         entity.hass = hass
 
         info = entity._attr_device_info
         assert info["identifiers"] == {
-            ("catlink", "LITTER_BOX_599_AABBCCDDEEFF")
+            ("catlink", "LITTER_BOX_599_AA:BB:CC:DD:EE:FF")
         }
         assert info["name"] == "Test Litter Box"
         assert info["model"] == "LB599"
@@ -112,7 +121,6 @@ class TestCatlinkEntity:
     ) -> None:
         """Test entity unique_id format."""
         mock_device.coordinator = mock_coordinator
-        mock_device.mac = "1122"
         mock_device.id = "dev456"
         entity = CatlinkEntity("litter_weight", mock_device)
         entity.coordinator = mock_coordinator
@@ -467,6 +475,18 @@ class TestCatlinkSensorEntity:
         entity.hass = hass
 
         with pytest.raises(HomeAssistantError):
+            await entity.async_add_timing("09:30")
+
+    async def test_schedule_service_rejects_cat(
+        self, hass, mock_coordinator
+    ) -> None:
+        """Test the schedule service refuses a Cat sensor with the clean error."""
+        cat = Cat({"id": "7"}, {}, mock_coordinator)
+        entity = CatlinkSensorEntity("weight", cat, {})
+        entity.coordinator = mock_coordinator
+        entity.hass = hass
+
+        with pytest.raises(HomeAssistantError, match="only supported on"):
             await entity.async_add_timing("09:30")
 
 

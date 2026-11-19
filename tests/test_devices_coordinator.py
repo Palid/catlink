@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from homeassistant.helpers.device_registry import DeviceInfo
+
 from custom_components.catlink.const import DOMAIN
 from custom_components.catlink.modules.devices_coordinator import DevicesCoordinator
 from custom_components.catlink.modules.account import Account
@@ -189,33 +191,93 @@ class TestDevicesCoordinatorAsyncUpdateData:
             mock_create.assert_not_called()
 
     @pytest.mark.usefixtures("enable_custom_integrations")
-    async def test_update_data_creates_cat_devices(
+    async def test_update_data_keeps_cats_out_of_devices(
         self, coordinator, mock_account, coordinator_hass_data
     ) -> None:
-        """Test _async_update_data creates cat devices from API response."""
+        """Test cats are kept by pet id, not in the devices dict or coordinator data."""
         mock_account.get_devices = AsyncMock(return_value=[])
         mock_account.get_cats = AsyncMock(
-            return_value=[{"id": "169004", "petName": "Zulu", "breedName": "Cat"}]
+            return_value=[{"id": 169004, "petName": "Zulu", "breedName": "Cat"}]
         )
         mock_account.get_cat_summary_simple = AsyncMock(
             return_value={"statusDescription": "Data collection in progress"}
         )
 
-        with patch(
-            "custom_components.catlink.modules.devices_coordinator.create_device"
-        ) as mock_create:
-            mock_device = MagicMock()
-            mock_device.id = "cat-169004"
-            mock_device.name = "Zulu"
-            mock_device.update_data = MagicMock()
-            mock_device.async_init = AsyncMock()
-            mock_create.return_value = mock_device
+        result = await coordinator._async_update_data()
 
-            result = await coordinator._async_update_data()
+        assert result == {}
+        assert coordinator_hass_data["devices"] == {}
+        assert list(coordinator.cats) == ["169004"]
+        assert coordinator.cats["169004"].status == "Data collection in progress"
+        mock_account.get_cat_summary_simple.assert_called_once()
 
-            assert "cat-169004" in result
-            mock_create.assert_called_once()
-            mock_account.get_cat_summary_simple.assert_called_once()
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_update_data_reuses_cat_instances(
+        self, coordinator, mock_account, coordinator_hass_data
+    ) -> None:
+        """Test a second refresh updates the same Cat in place and notifies listeners."""
+        mock_account.get_devices = AsyncMock(return_value=[])
+        mock_account.get_cats = AsyncMock(
+            return_value=[{"id": "169004", "petName": "Zulu", "weight": 4.7}]
+        )
+        mock_account.get_cat_summary_simple = AsyncMock(return_value={})
+
+        await coordinator._async_update_data()
+        cat = coordinator.cats["169004"]
+        listener = MagicMock()
+        cat.listeners["x"] = listener
+
+        mock_account.get_cats = AsyncMock(
+            return_value=[{"id": "169004", "petName": "Zulu", "weight": 4.9}]
+        )
+        await coordinator._async_update_data()
+
+        assert coordinator.cats["169004"] is cat
+        assert cat.weight == 4.9
+        listener.assert_called_once()
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_second_refresh_with_changed_mac_adds_no_entities(
+        self, coordinator, mock_account, coordinator_hass_data
+    ) -> None:
+        """Test a device whose mac changes or disappears keeps its entities."""
+        added = []
+        coordinator_hass_data["add_entities"]["test-entry-123"] = {
+            "sensor": added.extend
+        }
+        mock_account.get_cats = AsyncMock(return_value=[])
+        mock_account.request = AsyncMock(return_value={})
+        device = {
+            "id": "dev1",
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "model": "LB599",
+            "deviceName": "Litter Box",
+            "deviceType": "LITTER_BOX_599",
+        }
+        mock_account.get_devices = AsyncMock(return_value=[device])
+        await coordinator._async_update_data()
+        first = len(added)
+        assert first > 0
+
+        for changed in ({**device, "mac": "11:22:33:44:55:66"}, {**device, "mac": None}):
+            mock_account.get_devices = AsyncMock(return_value=[changed])
+            await coordinator._async_update_data()
+
+        assert len(added) == first
+
+    @pytest.mark.usefixtures("enable_custom_integrations")
+    async def test_update_data_ignores_device_ids_for_cats(
+        self, mock_account, coordinator_hass_data
+    ) -> None:
+        """Test the device_ids filter does not apply to cats."""
+        coord = DevicesCoordinator(mock_account, "entry-1", device_ids=["other"])
+        mock_account.get_devices = AsyncMock(return_value=[])
+        mock_account.get_cats = AsyncMock(return_value=[{"id": "1"}])
+        mock_account.get_cat_summary_simple = AsyncMock(return_value={})
+
+        await coord._async_update_data()
+
+        assert list(coord.cats) == ["1"]
 
 
 class TestDevicesCoordinatorUpdateHassEntities:
@@ -235,10 +297,11 @@ class TestDevicesCoordinatorUpdateHassEntities:
         mock_device.id = "dev1"
         mock_device.name = "Litter Box"
         mock_device.coordinator = coordinator
-        mock_device.mac = "AA:BB:CC:DD:EE:FF"
-        mock_device.type = "LITTER_BOX_599"
-        mock_device.model = "LB599"
-        mock_device.detail = {}
+        mock_device.registry_id = "LITTER_BOX_599_AA:BB:CC:DD:EE:FF"
+        mock_device.object_id_prefix = "LITTER_BOX_599_EEFF"
+        mock_device.device_info = DeviceInfo(
+            identifiers={("catlink", mock_device.registry_id)}, name="Litter Box"
+        )
         mock_device.hass_sensor = {
             "state": {"icon": "mdi:info", "state_attrs": lambda: {}},
             "error": {"icon": "mdi:alert", "state_attrs": lambda: {}},

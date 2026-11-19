@@ -29,7 +29,7 @@ class CatlinkSensorEntity(CatlinkEntity, SensorEntity):
 
     async def _schedule_action(self, method: str, *args) -> bool:
         """Dispatch a schedule service to the device, refusing other device types."""
-        if self._device.type != SCHEDULE_DEVICE_TYPE:
+        if getattr(self._device, "type", None) != SCHEDULE_DEVICE_TYPE:
             raise HomeAssistantError(
                 f"{method} is only supported on {SCHEDULE_DEVICE_TYPE} devices"
             )
