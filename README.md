@@ -36,6 +36,7 @@
 - [One Session per Account](#one-session-per-account)
 - [Services (Optional)](#services-optional)
 - [Does this work without the cloud?](#does-this-work-without-the-cloud)
+- [Where the camera's video goes](#where-the-cameras-video-goes-and-keeping-it-off-the-cloud)
 - [Changelog](#changelog)
 - [How to contribute?](#how-to-contribute)
 - [Disclaimer on Using Logos](#disclaimer-on-using-logos)
@@ -337,6 +338,48 @@ If the internet or the vendor cloud is down, the Devices go unavailable. The
 full write-up, evidence, and the follow-up worth doing instead (cloud
 resilience: keep last-known state offline, receive state by push rather than
 polling) are in [`docs/local-control-spike.md`](docs/local-control-spike.md).
+
+## Where the camera's video goes (and keeping it off the cloud)
+
+The Scooper Pro Ultra has a built-in camera. This section describes where its video actually travels — based on a packet capture of a real Device on an isolated network — and how to keep the live feed from leaving through Alibaba Cloud. It documents Device behaviour; the camera is not exposed as a Home Assistant entity by this integration.
+
+**The live video is peer-to-peer, not cloud-relayed.** When you open the live view, the viewer (the phone app, or anything that speaks the vendor's protocol) and the camera form a direct connection, using Aliyun's LinkVisual service only as a broker to punch through NAT (STUN/ICE). The frames then flow straight between the two:
+
+- **On the same network**, the camera streams directly to the viewer over the LAN. The frames never leave your network.
+- **From outside**, the camera streams directly to the viewer across the internet over a hole-punched peer-to-peer connection. The frames go to your device, not to a cloud server.
+
+**What the camera does send to Alibaba Cloud** is the control channel (MQTT — the cleaning commands and status this integration uses) and telemetry/logs (an Aliyun SLS endpoint, `link-visual-…log.aliyuncs.com`). So the cloud learns *when* you watch and operate the Device, but while peer-to-peer succeeds it does not receive the video.
+
+**The one path that would route video through the cloud** is a fallback relay: the camera continually tries to open an outbound connection to an Aliyun streaming relay (hostname pattern `iotx-vision-streaming-rtmp-*.aliyuncs.com`, **TCP port 8000**) and would push the stream there as a plain `rtmp://` push if a direct peer-to-peer connection could not be formed. The relay host and port are handed to the Device by the cloud at stream-setup time, not fixed in firmware.
+
+### Keeping the feed off the cloud
+
+All of this is done at your **router/firewall**, matched on the **camera's source IP** (put the Device on an isolated IoT VLAN first, so these rules only affect the camera). Two things to know before the rules:
+
+- **The camera ignores the DNS you hand it** — it queries `8.8.8.8` directly and reaches its endpoints by raw IP. So DNS-based blocking (Pi-hole / AdGuard) does nothing here; you need **firewall rules on IPs/ports**, not domain blocklists. (The hostnames below are what those IPs resolve to, for reference.)
+- There are two levels, depending on whether you still want **remote** viewing.
+
+**Level 1 — keep the feed off Alibaba Cloud (remote viewing still works).**
+Block the camera's outbound **TCP 8000** to the internet — the relay `iotx-vision-streaming-rtmp-*.aliyuncs.com`. Live viewing keeps working (it uses the direct peer-to-peer path), and the one path that would route video *through* Aliyun is cut. Optionally also block the telemetry — the SLS log endpoint `link-visual-*.log.aliyuncs.com` on **TCP 443** — to stop the "when you watch" logs. Because that endpoint is a load-balanced IP pool reached by raw IP, block it by its **resolved IP range**, not by name (in one capture it was `47.252.97.x`). This is telemetry, not the video.
+
+**Level 2 — fully contain the video to your LAN (no remote viewing).**
+Remote viewing works by the camera sending the video **peer-to-peer straight to the viewer's public (e.g. cellular) IP**, hole-punched via STUN. To stop that while keeping local viewing, block the camera's **outbound UDP to the internet**, allowing only DNS and NTP so the Device stays online and time-synced. As three ordered rules (the ALLOWs must come **before** the BLOCK):
+
+```
+ALLOW  camera_ip -> any  UDP 53     # DNS (keep the Device online)
+ALLOW  camera_ip -> any  UDP 123    # NTP (time sync, needed for TLS)
+BLOCK  camera_ip -> any  UDP any    # STUN discovery + the P2P video media
+```
+
+This drops the STUN discovery and the outbound media, so remote live view spins and then fails, while **local (same-network) viewing is unaffected** — it uses LAN addresses, not the internet. With Level 2 in place the camera's video is physically **LAN-only**: it never reaches Alibaba Cloud and never reaches a remote viewer.
+
+Notes and trade-offs:
+
+- **Control still needs the cloud — leave it open.** These rules contain only the video. The camera still reaches Aliyun IoT over **TCP** (MQTT on `1883` plus the HTTPS Aliyun Channel this integration uses) for commands and status; don't block those or the Device goes offline. Keep **UDP 53/123** allowed for the same reason.
+- **No remote app viewing after Level 2** — live view away from home will fail by design; same-network viewing still works.
+- **Firewall by IP, not DNS.** Because the camera ignores handed DNS and dials by IP, every rule here is an IP/port firewall rule matched on the camera's source address.
+- **Order matters.** If your firewall is first-match-wins (most are), the two UDP ALLOW rules must be evaluated before the UDP BLOCK, or the Device loses DNS and drops offline.
+- **Point-in-time behaviour.** This reflects firmware observed on one Device; vendors can change it, so re-verify before relying on it.
 
 ## Changelog
 
