@@ -1457,6 +1457,18 @@ class TestScooperProUltraAliyun:
         device.thing_properties = {"RunStatus": run_status}
         assert device.status == expected
 
+    @pytest.mark.parametrize(
+        ("properties", "expected"),
+        [({"SleepMode": "1"}, True), ({"SleepMode": "0"}, False), ({}, False)],
+    )
+    def test_camera_off_is_sleep_mode_1(
+        self, mock_coordinator, sample_pro_ultra_data, properties, expected
+    ) -> None:
+        """Test the camera reads as off only when SleepMode is 1."""
+        device = ScooperProUltraDevice(sample_pro_ultra_data, mock_coordinator)
+        device.thing_properties = properties
+        assert device.camera_off is expected
+
     async def test_clean_writes_run_status(
         self, mock_coordinator, sample_pro_ultra_data
     ) -> None:

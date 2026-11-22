@@ -211,6 +211,11 @@ class ScooperProUltraDevice(LitterDevice):
         return self._prop_int("SleepMode") == 0
 
     @property
+    def camera_off(self) -> bool:
+        """Return whether the camera is switched off (SleepMode 1)."""
+        return self._prop_int("SleepMode") == 1
+
+    @property
     def work_mode(self) -> str | None:
         """Return the work mode from the Aliyun CurrentModel property."""
         return WORK_MODE_LABELS.get(self._prop_int("CurrentModel"))
@@ -531,6 +536,16 @@ class ScooperProUltraDevice(LitterDevice):
                 "icon": "mdi:stop",
                 "name": "Cancel",
                 "async_press": self.async_cancel,
+            },
+        }
+
+    @property
+    def hass_camera(self) -> dict:
+        """Return the device camera."""
+        return {
+            "camera": {
+                "icon": "mdi:cctv",
+                "name": "Camera",
             },
         }
 

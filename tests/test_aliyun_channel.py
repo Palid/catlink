@@ -25,6 +25,7 @@ CREATE_PATH = "/account/createSessionByAuthCode"
 REFRESH_PATH = "/account/checkOrRefreshSession"
 GET_PATH = "/thing/properties/get"
 SET_PATH = "/living/thing/properties/set"
+STREAM_QUERY_PATH = "/vision/customer/stream/query"
 
 
 class FakeResponse:
@@ -274,6 +275,55 @@ async def test_set_properties_for_iot_id() -> None:
         "iotId": "IOTID26CHAR",
         "items": {"RunStatus": "runStatus=1&biz=1"},
     }
+
+
+async def test_signed_request_for_a_gateway_path() -> None:
+    """A signed call posts the path, apiVer, iotToken and params, and returns data."""
+    session = FakeSession()
+    session.route(REGION_PATH, _region_ok())
+    session.route(OA_LOGIN_PATH, _oa_login_ok())
+    session.route(CREATE_PATH, _session_data())
+    session.route(
+        STREAM_QUERY_PATH,
+        {"code": 200, "data": {"p2pInfo": {"signalUrl": "wss://signal"}}},
+    )
+    channel = make_channel(session, (await _counting_auth_code([])))
+    await channel.async_open()
+
+    data = await channel.async_request(
+        STREAM_QUERY_PATH, "2.2.0", {"iotId": "IOTID26CHAR", "streamType": 0}
+    )
+
+    assert data == {"p2pInfo": {"signalUrl": "wss://signal"}}
+    req = session.last(STREAM_QUERY_PATH)
+    assert urlparse(req.url).hostname == "gw.example.com"
+    assert req.body["request"] == {
+        "apiVer": "2.2.0",
+        "language": "en-US",
+        "iotToken": "tok1",
+    }
+    assert req.body["params"] == {"iotId": "IOTID26CHAR", "streamType": 0}
+    assert req.headers["x-ca-key"] == "test-key"
+    assert req.headers["x-ca-signature"]
+
+
+async def test_signed_request_refreshes_and_classifies() -> None:
+    """A signed call refreshes a token near expiry and raises a gateway error."""
+    session = FakeSession()
+    session.route(REGION_PATH, _region_ok())
+    session.route(OA_LOGIN_PATH, _oa_login_ok())
+    session.route(CREATE_PATH, _session_data(iot_expire=100, refresh_expire=864000))
+    session.route(REFRESH_PATH, _session_data(iot_expire=86400, token="tok2"))
+    session.route(STREAM_QUERY_PATH, {"code": 9201, "message": "device offline"})
+    channel = make_channel(session, (await _counting_auth_code([])))
+    await channel.async_open()
+
+    with pytest.raises(AliyunRequestFailed) as err:
+        await channel.async_request(STREAM_QUERY_PATH, "2.2.0", {"iotId": "IOT"})
+
+    assert err.value.code == 9201
+    assert session.count(REFRESH_PATH) == 1
+    assert session.last(STREAM_QUERY_PATH).body["request"]["iotToken"] == "tok2"
 
 
 async def test_refreshes_ahead_of_expiry() -> None:

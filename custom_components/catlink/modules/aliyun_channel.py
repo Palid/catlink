@@ -150,6 +150,10 @@ class AliyunChannel:
             authed=True,
         )
 
+    async def async_request(self, path: str, api_ver: str, params: dict) -> dict:
+        """Send an authenticated, signed gateway call and return its data."""
+        return await self._async_request(path, api_ver, params, authed=True)
+
     async def async_close(self) -> None:
         """Drop the local session so the next call opens a fresh one."""
         self._iot_token = ""
