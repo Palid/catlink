@@ -80,6 +80,21 @@
           "update_interval": "Refresh interval"
         },
         "title": "Manage devices"
+      },
+      "camera": {
+        "description": "Choose how the Scooper Pro Ultra's camera is offered to your browsers and apps. H.265 passes the camera's own video through untouched. H.264 makes go2rtc transcode it with ffmpeg for clients that cannot play H.265, such as Firefox. Transcoding costs a lot of CPU while someone watches. The choice applies to go2rtc's live view only: Home Assistant's HLS fallback, camera.record and camera.play_stream keep working, always with the camera's H.265 and without sound.",
+        "data": {
+          "camera_codec": "Live view codec"
+        },
+        "title": "Camera"
+      }
+    }
+  },
+  "selector": {
+    "camera_codec": {
+      "options": {
+        "h265": "H.265, passed through (default)",
+        "h264": "H.264, transcoded by ffmpeg"
       }
     }
   },

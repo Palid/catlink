@@ -34,6 +34,10 @@ ACCOUNT_ID_PATH = ("appUser", "id")
 CONF_CATS = "cats"
 CONF_DEVICE_IDS = "device_ids"
 CONF_UPDATE_INTERVAL = "update_interval"
+CONF_CAMERA_CODEC = "camera_codec"
+
+CAMERA_CODEC_H265 = "h265"
+CAMERA_CODEC_H264 = "h264"
 
 DEFAULT_API_BASE = "https://app.catlinks.cn/api/"
 
@@ -114,6 +118,7 @@ SUPPORTED_DOMAINS = [
     "button",
     "number",
     "time",
+    "camera",
 ]
 
 ACCOUNT_SCHEMA = vol.Schema(

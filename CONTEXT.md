@@ -57,3 +57,13 @@ _Avoid_: Attribute, panel data, thing model
 **Local Control**:
 State and commands exchanged directly between Home Assistant and a Device over the home network, with no cloud involved. No litter box family is known to offer it.
 _Avoid_: Offline mode, LAN mode, local-network-only
+
+### Watching the camera
+
+**Live Session**:
+The on-demand media session between Home Assistant and one Device's camera, negotiated through Signalling and carried only on the LAN. Every viewer and recording of that Device shares it.
+_Avoid_: stream, P2P connection, call
+
+**Signalling**:
+The cloud-brokered exchange of offer, answer and candidates that sets up a Live Session. It carries no media.
+_Avoid_: handshake, negotiation channel

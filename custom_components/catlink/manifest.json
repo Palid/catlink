@@ -5,6 +5,7 @@
   "documentation": "https://github.com/Palid/catlink",
   "issue_tracker": "https://github.com/Palid/catlink/issues",
   "requirements": ["phonenumbers>=8.13.0","pydantic>=2.0"],
+  "dependencies": ["ffmpeg", "network"],
   "codeowners": ["@Palid"],
   "config_flow": true,
   "iot_class": "cloud_polling"

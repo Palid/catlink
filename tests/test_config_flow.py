@@ -4,10 +4,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from custom_components.catlink.config_flow import _device_label
 from custom_components.catlink.const import (
+    CAMERA_CODEC_H264,
+    CAMERA_CODEC_H265,
     CONF_ACCOUNT_ID,
     CONF_ALIYUN_CLOUD_KEY,
     CONF_ALIYUN_CLOUD_SECRET,
     CONF_API_BASE,
+    CONF_CAMERA_CODEC,
     CONF_CLIENT_SERVER,
     CONF_COUNTRY_CODE,
     CONF_DEVICE_IDS,
@@ -386,6 +389,75 @@ async def test_options_flow(
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_DEVICE_IDS] == ["dev1", "dev2"]
     assert result["data"][CONF_UPDATE_INTERVAL] == 300
+
+
+async def _options_with_a_pro_ultra(
+    hass: HomeAssistant, mock_account, device_ids: list[str]
+) -> dict:
+    """Open Configure on an Account owning a Pro Ultra and keep these Devices."""
+    mock_account.return_value.get_devices = AsyncMock(
+        return_value=[
+            {
+                "id": "dev1",
+                "deviceName": "Litter Box",
+                "model": "LB599",
+                "deviceType": "LITTER_BOX_599",
+            },
+            PRO_ULTRA,
+        ]
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_PHONE_IAC: "86",
+            CONF_PHONE: "13812345678",
+            "api_base": "https://app.catlinks.cn/api/",
+            "password": "testpass",
+        },
+        options={CONF_DEVICE_IDS: ["dev1"], CONF_UPDATE_INTERVAL: 60},
+        unique_id="86-13812345678",
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    return await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_DEVICE_IDS: device_ids, CONF_UPDATE_INTERVAL: 60},
+    )
+
+
+async def test_options_flow_without_a_pro_ultra_skips_the_camera_step(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test Configure finishes after the init step when no Pro Ultra is kept."""
+    result = await _options_with_a_pro_ultra(hass, mock_account, ["dev1"])
+
+    assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert result["data"] == {CONF_DEVICE_IDS: ["dev1"], CONF_UPDATE_INTERVAL: 60}
+
+
+async def test_options_flow_with_a_pro_ultra_offers_the_camera_codec(
+    hass: HomeAssistant, enable_custom_integrations, mock_account
+) -> None:
+    """Test a kept Pro Ultra adds the camera step, defaulting to H.265."""
+    result = await _options_with_a_pro_ultra(
+        hass, mock_account, ["dev1", "dev-ultra"]
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.FORM
+    assert result["step_id"] == "camera"
+    assert _schema_defaults(result) == {CONF_CAMERA_CODEC: CAMERA_CODEC_H265}
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_CAMERA_CODEC: CAMERA_CODEC_H264}
+    )
+
+    assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert result["data"] == {
+        CONF_DEVICE_IDS: ["dev1", "dev-ultra"],
+        CONF_UPDATE_INTERVAL: 60,
+        CONF_CAMERA_CODEC: CAMERA_CODEC_H264,
+    }
 
 
 async def _pick_sign_in_method(hass: HomeAssistant, method: str) -> dict:

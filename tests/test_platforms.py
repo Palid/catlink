@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from custom_components.catlink import (
     binary_sensor,
     button,
+    camera,
     select,
     sensor,
     switch,
@@ -20,6 +21,7 @@ from custom_components.catlink.const import (
     SUPPORTED_DOMAINS,
 )
 from custom_components.catlink.devices.litterbox import LitterBox
+from custom_components.catlink.entities.camera import CatlinkCameraEntity
 from custom_components.catlink.entities.registry import DOMAIN_ENTITY_CLASSES
 from custom_components.catlink.entities.sensor import CatlinkSensorEntity
 import pytest
@@ -31,6 +33,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
 DEVICE_UNIQUE_ID = "LITTER_BOX_599_AABBCCDDEEFF-error"
+# A camera needs a Scooper Pro Ultra and its Live Session; test_camera.py covers it.
+LITTER_BOX_DOMAINS = [domain for domain in SUPPORTED_DOMAINS if domain != "camera"]
 
 
 @pytest.fixture
@@ -133,7 +137,16 @@ async def test_platforms_loaded(init_integration: MockConfigEntry) -> None:
     """Test all supported platforms are loaded."""
     assert init_integration.state is ConfigEntryState.LOADED
     for domain in SUPPORTED_DOMAINS:
-        assert domain in ["sensor", "binary_sensor", "switch", "select", "button", "number", "time"]
+        assert domain in [
+            "sensor",
+            "binary_sensor",
+            "switch",
+            "select",
+            "button",
+            "number",
+            "time",
+            "camera",
+        ]
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
@@ -211,13 +224,19 @@ async def test_all_platforms_have_setup_entry(
         ("select", select),
         ("button", button),
         ("time", time),
+        ("camera", camera),
     ]:
         assert hasattr(module, "async_setup_entry")
         assert callable(module.async_setup_entry)
 
 
+def test_registry_includes_camera() -> None:
+    """Test the camera platform builds CatLink camera entities."""
+    assert DOMAIN_ENTITY_CLASSES["camera"] is CatlinkCameraEntity
+
+
 @pytest.mark.usefixtures("enable_custom_integrations")
-@pytest.mark.parametrize("platform_domain", SUPPORTED_DOMAINS)
+@pytest.mark.parametrize("platform_domain", LITTER_BOX_DOMAINS)
 async def test_entity_id_uses_platform_domain(
     hass: HomeAssistant,
     init_integration: MockConfigEntry,
@@ -263,7 +282,7 @@ async def test_no_wrong_domain_warning_logged(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Test adding entities logs no wrong-domain deprecation warning."""
-    for platform_domain in SUPPORTED_DOMAINS:
+    for platform_domain in LITTER_BOX_DOMAINS:
         entity = DOMAIN_ENTITY_CLASSES[platform_domain](
             "error", catlink_device, {"options": ["Normal"]}
         )

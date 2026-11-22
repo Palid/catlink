@@ -36,6 +36,7 @@
 - [One Session per Account](#one-session-per-account)
 - [Services (Optional)](#services-optional)
 - [Does this work without the cloud?](#does-this-work-without-the-cloud)
+- [Camera live view](#camera-live-view)
 - [Where the camera's video goes](#where-the-cameras-video-goes-and-keeping-it-off-the-cloud)
 - [Changelog](#changelog)
 - [How to contribute?](#how-to-contribute)
@@ -47,7 +48,7 @@ The CatLink (New) custom integration connects a CatLink Account to Home Assistan
 
 - **Scooper/Litterbox Device Integration**: Effortlessly connect your CatLINK Scooper and Litterbox devices to Home Assistant, enabling centralized control and monitoring within your smart home environment.
 
-- **Scooper Pro Ultra**: Live status, cleaning actions, work mode, device settings and timed-cleaning schedules. See [Scooper Pro Ultra](#scooper-pro-ultra).
+- **Scooper Pro Ultra**: Live status, cleaning actions, work mode, device settings, timed-cleaning schedules and the camera's live view. See [Scooper Pro Ultra](#scooper-pro-ultra).
 
 - **Email or phone sign-in**: Sign in with the Email or the phone number you use in the CatLink app. The region is discovered automatically.
 
@@ -125,6 +126,7 @@ The Scooper Pro Ultra reports its live status and takes its cleaning commands on
 | Switch | `quiet_mode`, `all_timings`, `auto_update_pet_weight` | CatLink Cloud |
 | Number | `clean_delay` (1–60 min), `full_bin_threshold` (level 1–4), `levelling_duration` (level 1–4) | Aliyun Channel |
 | Time | `quiet_start`, `quiet_end` (the quiet-mode hours) | CatLink Cloud |
+| Camera | `camera`, live video and sound (see [Camera live view](#camera-live-view)) | set up over the Aliyun Channel, media over your LAN |
 | Service | `catlink.add_timing`, `catlink.update_timing`, `catlink.remove_timing`, `catlink.toggle_timing` (see [Services](#scooper-pro-ultra-schedules)) | CatLink Cloud |
 
 Entity IDs follow the pattern `sensor.visual_pro_ultra_<last 4 of the MAC>_status`.
@@ -339,9 +341,39 @@ full write-up, evidence, and the follow-up worth doing instead (cloud
 resilience: keep last-known state offline, receive state by push rather than
 polling) are in [`docs/local-control-spike.md`](docs/local-control-spike.md).
 
+## Camera live view
+
+Each Scooper Pro Ultra gets a camera entity, `camera.visual_pro_ultra_<last 4 of the MAC>_camera`, that shows the camera's live video with sound.
+
+**Media stays on your LAN; only the setup uses the cloud.** To start watching, Home Assistant asks the cloud for a session through the Aliyun Channel, then exchanges connection details with the camera over a vendor WebSocket. That exchange carries no video. The video and sound then flow straight from the camera to Home Assistant over your home network. Home Assistant connects only to the camera's private addresses and never uses the vendor's cloud relay, so live view keeps working with both firewall levels in [Where the camera's video goes](#where-the-cameras-video-goes-and-keeping-it-off-the-cloud). Inside Home Assistant the stream is served as RTSP on the loopback address (`127.0.0.1`) only, and Home Assistant's built-in go2rtc plays it in your browser. Because the setup still needs the cloud, this is not Local Control (see [Does this work without the cloud?](#does-this-work-without-the-cloud)).
+
+**On demand.** The camera streams only while something is watching. Opening the camera starts a session, which takes a couple of seconds. When the last viewer leaves, the session closes about 10 seconds later, so reloading a page reuses it. Every viewer of the same camera shares one session. Home Assistant's **Preload stream** camera setting keeps a stream open all the time, which turns on demand into always-on; leave it off unless you want the camera streaming around the clock.
+
+**Still images.** The camera's picture on a dashboard is the last keyframe of the most recent session, so refreshing a card never starts the camera. Until the camera has been watched once since the integration loaded, there is no picture.
+
+**Switched off.** While the camera is switched off (its sleep mode), the entity reports it as off, no session is attempted, and asking for the stream fails at once.
+
+**H.265 or H.264.** The camera sends H.265 video and G.711 A-law sound, and by default both are passed through untouched. Chrome 136 or newer, Edge and Safari can usually play H.265, depending on your hardware; Firefox cannot. For Firefox, open the entry's **Configure**, keep the Scooper Pro Ultra selected, and choose **H.264** on the camera step. go2rtc then transcodes the video with ffmpeg while someone watches. That costs a lot of CPU, a software H.265 decode plus an H.264 encode at 720×1280 and about 22 frames a second, which a small host such as a Raspberry Pi may struggle with. The choice applies only to what go2rtc plays: Home Assistant's HLS fallback, `camera.record` and `camera.play_stream` keep working in H.264 mode, with the camera's H.265. If you set an orientation for the camera in Home Assistant, go2rtc already transcodes it to H.264 to apply the orientation, and H.264 mode adds no second transcode.
+
+**HLS fallback and `camera.record` are video only.** When a browser cannot use WebRTC, Home Assistant falls back to HLS. That fallback, `camera.record` and `camera.play_stream` go through Home Assistant's `stream` component, which always gets the camera's H.265, whichever codec you choose, and keeps only AAC and MP3 sound, so it drops the camera's A-law audio. A Home Assistant install without go2rtc has only this path, so its live view is video only.
+
+**go2rtc on the same host only.** The stream is served on `127.0.0.1` of the Home Assistant host, so only a go2rtc on that host can use it: the one built into Home Assistant, or a separate go2rtc on the same machine that Home Assistant's go2rtc integration points at by URL. If Home Assistant or that go2rtc runs in a container, the container needs the host's network. A go2rtc on another machine cannot reach the stream, and live view will not play through it.
+
+**The local URL in logs.** The stream's URL carries a token in its path. Home Assistant's own `stream` component may write that URL to its log: at debug level, and in its error messages when it cannot open or read the stream. The token works only from the Home Assistant host and changes every time the integration reloads.
+
+**No sign-ins of its own.** Live view uses the CatLink Session and the Aliyun Channel that Home Assistant already holds, and adds no sign-ins of its own. When the Aliyun Channel needs a new authorisation code and the CatLink Session has ended, Home Assistant signs in for it as it would for any other request, which evicts your phone app if it uses the same Account. To prevent that, [pause sign-in](#one-session-per-account) with the **CatLink sign-in** switch: while it is paused and the Session has ended, the camera becomes unavailable like the other entities instead of signing in.
+
+**What it needs:**
+
+- The Aliyun app key and secret the Scooper Pro Ultra already needs (see [How to Configure?](#how-to-configure)).
+- Home Assistant on the same network as the camera. Home Assistant offers the camera the private IPv4 addresses of the network adapters enabled under Settings → System → Network, and it always sends first. If the camera sits on an isolated IoT VLAN, allow UDP from Home Assistant to the camera; a stateful firewall then lets the camera's replies back.
+- Home Assistant's `ffmpeg` and `network` integrations, which load automatically.
+
+Not yet known: how long one session can last, whether the phone app can watch while Home Assistant does, and whether a switched-off camera would wake up for a viewer.
+
 ## Where the camera's video goes (and keeping it off the cloud)
 
-The Scooper Pro Ultra has a built-in camera. This section describes where its video actually travels — based on a packet capture of a real Device on an isolated network — and how to keep the live feed from leaving through Alibaba Cloud. It documents Device behaviour; the camera is not exposed as a Home Assistant entity by this integration.
+The Scooper Pro Ultra has a built-in camera. This section describes where its video actually travels — based on a packet capture of a real Device on an isolated network — and how to keep the live feed from leaving through Alibaba Cloud. It documents Device behaviour; the camera entity this integration adds, which keeps working at both levels below, is described in [Camera live view](#camera-live-view).
 
 **The live video is peer-to-peer, not cloud-relayed.** When you open the live view, the viewer (the phone app, or anything that speaks the vendor's protocol) and the camera form a direct connection, using Aliyun's LinkVisual service only as a broker to punch through NAT (STUN/ICE). The frames then flow straight between the two:
 

@@ -21,6 +21,9 @@ from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
@@ -28,10 +31,13 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     ALIYUN_CHANNEL_DEVICE_TYPES,
+    CAMERA_CODEC_H264,
+    CAMERA_CODEC_H265,
     CONF_ACCOUNT_ID,
     CONF_ALIYUN_CLOUD_KEY,
     CONF_ALIYUN_CLOUD_SECRET,
     CONF_API_BASE,
+    CONF_CAMERA_CODEC,
     CONF_CLIENT_SERVER,
     CONF_COUNTRY_CODE,
     CONF_DEVICE_IDS,
@@ -483,11 +489,22 @@ class CatlinkConfigFlow(ConfigFlow, domain=DOMAIN):
 class CatlinkOptionsFlowHandler(OptionsFlowWithReload):
     """Handle CatLink options flow."""
 
+    def __init__(self) -> None:
+        """Initialize the options flow."""
+        self._options: dict[str, Any] = {}
+        self._device_types: dict[str, str] = {}
+
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Manage device selection and refresh interval."""
         if user_input is not None:
+            if any(
+                self._device_types.get(did) in ALIYUN_CHANNEL_DEVICE_TYPES
+                for did in user_input.get(CONF_DEVICE_IDS, [])
+            ):
+                self._options = user_input
+                return await self.async_step_camera()
             return self.async_create_entry(data=user_input)
 
         coordinator = (
@@ -523,6 +540,7 @@ class CatlinkOptionsFlowHandler(OptionsFlowWithReload):
                 continue
             supported = dat.get("deviceType", "") in SUPPORTED_DEVICE_TYPES
             device_options[did] = _device_label(dat, supported)
+            self._device_types[did] = dat.get("deviceType", "")
             if supported:
                 supported_ids.append(did)
 
@@ -552,6 +570,33 @@ class CatlinkOptionsFlowHandler(OptionsFlowWithReload):
                             step=30,
                             mode=NumberSelectorMode.BOX,
                             unit_of_measurement="s",
+                        )
+                    ),
+                }
+            ),
+        )
+
+    async def async_step_camera(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose the codec the camera's live view is offered in."""
+        if user_input is not None:
+            return self.async_create_entry(data={**self._options, **user_input})
+
+        return self.async_show_form(
+            step_id="camera",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_CAMERA_CODEC,
+                        default=self.config_entry.options.get(
+                            CONF_CAMERA_CODEC, CAMERA_CODEC_H265
+                        ),
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[CAMERA_CODEC_H265, CAMERA_CODEC_H264],
+                            mode=SelectSelectorMode.LIST,
+                            translation_key=CONF_CAMERA_CODEC,
                         )
                     ),
                 }
