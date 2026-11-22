@@ -207,8 +207,8 @@ class ScooperProUltraDevice(LitterDevice):
 
     @property
     def camera_sleep(self) -> bool:
-        """Return whether the camera is asleep (SleepMode is inverted: 0 = awake)."""
-        return self._prop_int("SleepMode") == 0
+        """Return whether the camera is asleep (SleepMode 1 = asleep, 0 = awake)."""
+        return self._prop_int("SleepMode") == 1
 
     @property
     def camera_off(self) -> bool:
@@ -682,9 +682,9 @@ class ScooperProUltraDevice(LitterDevice):
         return await self._write_thing_property("SoftStoolMode", 1 if enable else 0)
 
     async def async_set_camera_sleep(self, enable: bool, **kwargs) -> bool:
-        """Put the camera to sleep or wake it (SleepMode is inverted)."""
+        """Put the camera to sleep or wake it."""
         self._require_idle()
-        return await self._write_thing_property("SleepMode", 0 if enable else 1)
+        return await self._write_thing_property("SleepMode", 1 if enable else 0)
 
     async def async_select_indicator_light(self, option: str, **kwargs) -> bool:
         """Set the indicator light mode."""

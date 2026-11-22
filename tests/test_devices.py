@@ -1414,7 +1414,7 @@ class TestScooperProUltraAliyun:
         assert device.continuous_clean is False
         assert device.prompt_sounds is True
         assert device.soft_stool is False
-        assert device.camera_sleep is True
+        assert device.camera_sleep is False
         assert device.work_mode == "induction"
         assert device.indicator_light == "auto"
         assert device.fill_light == "on"
@@ -1627,15 +1627,17 @@ class TestScooperProUltraAliyun:
             "IOTID26CHAR26CHAR26CHAR26", {"ChildLock": 1}
         )
 
-    async def test_camera_sleep_write_is_inverted(
+    async def test_camera_sleep_write(
         self, mock_coordinator, sample_pro_ultra_data
     ) -> None:
-        """Test turning camera sleep on writes SleepMode 0 (awake maps to on)."""
+        """Test turning camera sleep on writes SleepMode 1 and off writes 0."""
         device, channel = _pro_ultra_ready(
             sample_pro_ultra_data, mock_coordinator, {"RunStatus": "runStatus=0&biz=0"}
         )
 
         await device.async_set_camera_sleep(True)
+        assert channel.async_set_properties.await_args[0][1] == {"SleepMode": 1}
+        await device.async_set_camera_sleep(False)
         assert channel.async_set_properties.await_args[0][1] == {"SleepMode": 0}
 
     async def test_number_writes_map_level_to_stored(
